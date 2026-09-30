@@ -1,5 +1,7 @@
 -- StockHold Lab / MySQL 8.4 LTS
 -- 设计稿：尚未执行验证。实现时迁移为 Flyway V1__create_inventory_schema.sql。
+-- v1.1：新增账本冻结字段、claim_deadline_at / claim_mode（宽限与迟到确认）、池回收计数。
+--       含 INTERVAL 表达式的 CHECK 约束须在锁定的 MySQL 8.4 版本实测。
 -- 应用、迁移和运维会话统一使用 UTC；业务写事务显式 READ COMMITTED。
 -- 无 CREATE DATABASE / DROP TABLE，避免误操作宿主数据库。
 -- 核心表刻意不设外键，原因见 总体技术方案.md。
@@ -29,7 +31,11 @@
 -- 预留 n       不修改账本         删除 n 行          新增 ACTIVE 头及数量明细
 -- 确认 n       H-=n,A-=n          不操作池           头转 CLAIMED，明细保留
 -- 取消/到期 n  A-=n，H不变        不直接插回池       头转 CANCELLED/EXPIRED，明细保留
+-- 迟到确认 n   H-=n；从池取的部分  可能删除 k 行      头 EXPIRED 转 CLAIMED(LATE)，明细保留
+--  (EXPIRED)   另 A-=k
 -- 调整 delta   H+=delta           不直接操作池       无；另写调整操作记录
+-- 回收调整     H+=delta,A-=k      删除 k 个未领取行  无；操作记录写 pool_reclaimed_quantity=k
+-- 冻结/解冻    status 变化        不操作池           无
 -- 上述每一项的多表修改必须在同一个本地事务中提交。
 -- 取消/到期回收的是 F，后续补充才将额度重新变为池行。
 -- 详细锁顺序与重试协议见 总体技术方案.md 第7节，不能仅按此表随意交换SQL顺序。
@@ -41,6 +47,7 @@
 --   2) 池补充：SELECT ... FOR UPDATE 锁该行，只能从 H-A 中发放新单位。
 --   3) 支付确认：同步减少 H 和 A；取消/到期只减少 A。
 --   4) 库存查询与审计：结合池行数和 ACTIVE 明细验证 A=P+R。
+--   5) 冻结：发现不变量违例时置 FROZEN，拒绝补充与迟到确认；claim/cancel/expiry 仍允许。
 -- 并发要点：正常预留只领取单位行，不更新本表，避免所有预留竞争同一计数行。
 --           补充、确认、释放、调整仍会竞争本表行锁，这是本方案的性能边界。
 -- 生命周期：初始化创建，长期保留；第一版不提供删除或在线修改池容量接口。
@@ -52,6 +59,9 @@ CREATE TABLE inventory_ledger (
     on_hand_quantity    BIGINT NOT NULL COMMENT 'H：尚未正式售出的账面库存，包含ACTIVE预留',
     allocated_quantity  BIGINT NOT NULL DEFAULT 0 COMMENT 'A：已发放额度，等于池行数P加ACTIVE预留量R',
     pool_capacity       INT NOT NULL DEFAULT 1000 COMMENT '单维度可用池行数上限；不是同时预留总量上限',
+    status              VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE正常；FROZEN疑似数据损坏，停止补充与迟到确认',
+    frozen_reason       VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '冻结原因枚举，如INVARIANT_VIOLATION、AUDIT_FAILED、POISON_RESERVATION、MANUAL',
+    frozen_at           DATETIME(6) NULL COMMENT '冻结时间，UTC；解冻后置空',
     created_at          DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '账本创建时间，UTC',
     updated_at          DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
                         ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '账本最近修改时间；正常预留不修改本行',
@@ -61,7 +71,10 @@ CREATE TABLE inventory_ledger (
     CONSTRAINT ck_ledger_quantity CHECK
         (on_hand_quantity >= 0 AND allocated_quantity >= 0
          AND allocated_quantity <= on_hand_quantity),
-    CONSTRAINT ck_ledger_capacity CHECK (pool_capacity BETWEEN 1 AND 1000)
+    CONSTRAINT ck_ledger_capacity CHECK (pool_capacity BETWEEN 1 AND 1000),
+    CONSTRAINT ck_ledger_status CHECK
+        ((status = 'ACTIVE' AND frozen_reason IS NULL AND frozen_at IS NULL)
+         OR (status = 'FROZEN' AND frozen_reason IS NOT NULL AND frozen_at IS NOT NULL))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
   COMMENT='库存账本：维护真实库存及发放额度，供补充、确认、释放和库存调整使用';
 
@@ -91,9 +104,11 @@ CREATE TABLE reservation_units (
 --   1) 创建预留：插入 ACTIVE 头，与池删除、明细插入一起提交；失败则头也回滚。
 --   2) 幂等查询：同 shop+idempotency_key 返回原预留，request_hash 检测换参数重用键。
 --   3) claim/cancel/expiry：先 FOR UPDATE 锁本行，再验证状态、锁账本并完成转换。
---   4) 到期任务：通过 status+expires_at 索引找候选，获得头锁后重新校验。
--- 状态转换：ACTIVE -> CLAIMED / CANCELLED / EXPIRED；终态不能复活。
---           ACTIVE但时间已到不允许claim，然而释放提交前仍占额度。
+--   4) 到期任务：通过 status+claim_deadline_at 索引找候选，获得头锁后重新校验。
+-- 状态转换：ACTIVE -> CLAIMED / CANCELLED / EXPIRED；CLAIMED、CANCELLED 为绝对终态。
+--           EXPIRED 只能经显式迟到确认转为 CLAIMED(claim_mode=LATE)，且必须重新取得额度。
+--           claim 与 expiry 统一以创建时持久化的 claim_deadline_at 为判定线（expires_at+宽限）。
+--           ACTIVE 即使已过截止时间，释放提交前仍占额度。
 -- 并发要点：本行是确认、取消、到期之间的仲裁锁；获得锁后另取数据库时间判断到期。
 -- 索引用途：幂等唯一键防重复预留；支付唯一键防同一支付关联两份预留；到期索引支持扫描。
 -- 生命周期：成功预留时创建，终态保留用于幂等与审计；第一版不自动清理。
@@ -108,31 +123,39 @@ CREATE TABLE reservations (
     total_quantity      INT NOT NULL COMMENT '整单单位总量，等于所有明细quantity之和',
     line_count          INT NOT NULL COMMENT '合并重复商品和地点后的明细条数',
     payment_reference   VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '确认扣减的支付引用；仅CLAIMED非空，同店铺唯一',
-    expires_at          DATETIME(6) NOT NULL COMMENT '预留到期时间，UTC；创建时用数据库时间计算',
+    expires_at          DATETIME(6) NOT NULL COMMENT '对调用方承诺的保留截止时间，UTC；创建时用数据库时间计算',
+    claim_deadline_at   DATETIME(6) NOT NULL COMMENT '普通claim截止及到期释放判定线=expires_at+宽限(0..120秒)；创建时持久化',
+    claim_mode          VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT 'RESERVED截止前确认；LATE截止后迟到确认；仅CLAIMED非空',
     claimed_at          DATETIME(6) NULL COMMENT '转为CLAIMED的业务处理时间，UTC',
     cancelled_at        DATETIME(6) NULL COMMENT '转为CANCELLED的业务处理时间，UTC',
-    expired_at          DATETIME(6) NULL COMMENT '到期释放处理时间，UTC；不等于计划到期时间',
+    expired_at          DATETIME(6) NULL COMMENT '到期释放处理时间，UTC；迟到确认后保留用于审计',
     created_at          DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '预留创建时间，UTC',
     updated_at          DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
                         ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '预留头最近修改时间，UTC',
     PRIMARY KEY (shop_id, reservation_id),
     UNIQUE KEY uq_reservation_idempotency (shop_id, idempotency_key),
     UNIQUE KEY uq_reservation_payment (shop_id, payment_reference),
-    KEY idx_reservation_expiry (status, expires_at, shop_id, reservation_id),
+    KEY idx_reservation_expiry (status, claim_deadline_at, shop_id, reservation_id),
     CONSTRAINT ck_reservation_status CHECK
         (status IN ('ACTIVE', 'CLAIMED', 'CANCELLED', 'EXPIRED')),
     CONSTRAINT ck_reservation_ttl CHECK (ttl_seconds BETWEEN 5 AND 900),
+    CONSTRAINT ck_reservation_deadline CHECK
+        (claim_deadline_at BETWEEN expires_at AND expires_at + INTERVAL 120 SECOND),
     CONSTRAINT ck_reservation_size CHECK
         (total_quantity BETWEEN 1 AND 1000 AND line_count BETWEEN 1 AND 20),
     CONSTRAINT ck_reservation_claim CHECK
-        ((status = 'CLAIMED' AND payment_reference IS NOT NULL AND claimed_at IS NOT NULL)
-         OR (status <> 'CLAIMED' AND payment_reference IS NULL AND claimed_at IS NULL)),
+        ((status = 'CLAIMED' AND payment_reference IS NOT NULL AND claimed_at IS NOT NULL
+          AND claim_mode IN ('RESERVED', 'LATE'))
+         OR (status <> 'CLAIMED' AND payment_reference IS NULL AND claimed_at IS NULL
+          AND claim_mode IS NULL)),
     CONSTRAINT ck_reservation_cancel CHECK
         ((status = 'CANCELLED' AND cancelled_at IS NOT NULL)
          OR (status <> 'CANCELLED' AND cancelled_at IS NULL)),
+    -- expired_at 非空只可能是 EXPIRED，或由 EXPIRED 迟到确认而来的 CLAIMED(LATE)
     CONSTRAINT ck_reservation_expired CHECK
         ((status = 'EXPIRED' AND expired_at IS NOT NULL)
-         OR (status <> 'EXPIRED' AND expired_at IS NULL))
+         OR (status IN ('ACTIVE', 'CANCELLED') AND expired_at IS NULL)
+         OR (status = 'CLAIMED' AND (expired_at IS NULL OR claim_mode = 'LATE')))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
   COMMENT='整单预留头：提供幂等、状态机、支付关联及到期释放的并发仲裁';
 
@@ -169,7 +192,8 @@ CREATE TABLE reserved_quantities (
 -- 使用场景：
 --   1) 管理端初始化/补货/减库存：先插入操作头，锁账本并修改，保存结果快照后一起提交。
 --   2) 管理请求重试：同shop+operation_id及相同hash返回原快照，不重复增加/减少库存。
---   3) 审计账面总量：本表delta之和（包含INITIALIZE）减CLAIMED明细之和应等于H。
+--   3) 审计账面总量：本表delta之和（包含INITIALIZE）减CLAIMED明细之和（含迟到确认）应等于H。
+--   4) 负向调整带reclaimPool时，记录回收的池单位数；回收永不影响ACTIVE预留。
 -- 并发要点：操作记录和账本必须同事务；失败操作不留记录，禁止保留半完成操作头。
 -- 快照语义：after字段是当次操作结果，不是当前值；重试时库存可能已被其他业务改变。
 -- 生命周期：成功操作后长期保留用于幂等及审计；第一版不自动归档或删除。
@@ -185,6 +209,7 @@ CREATE TABLE inventory_operations (
     on_hand_after       BIGINT NOT NULL COMMENT '本次操作完成后的H快照，非当前库存',
     allocated_after     BIGINT NOT NULL COMMENT '本次操作完成后的A快照，供幂等返回',
     pool_capacity_after INT NOT NULL COMMENT '本次操作时的池容量快照',
+    pool_reclaimed_quantity INT NOT NULL DEFAULT 0 COMMENT '负向调整时从池中回收并删除的未领取单位数；只减A，不影响H的审计等式',
     created_at          DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '操作记录创建时间，UTC',
     PRIMARY KEY (shop_id, operation_id),
     KEY idx_inventory_operation_history
@@ -195,7 +220,11 @@ CREATE TABLE inventory_operations (
          OR (operation_type = 'ADJUST' AND delta_quantity <> 0)),
     CONSTRAINT ck_operation_snapshot CHECK
         (on_hand_after >= allocated_after AND allocated_after >= 0
-         AND pool_capacity_after BETWEEN 1 AND 1000)
+         AND pool_capacity_after BETWEEN 1 AND 1000),
+    CONSTRAINT ck_operation_reclaim CHECK
+        (pool_reclaimed_quantity BETWEEN 0 AND 1000
+         AND (pool_reclaimed_quantity = 0
+              OR (operation_type = 'ADJUST' AND delta_quantity < 0)))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
   COMMENT='库存初始化和调整记录：防止管理请求重复执行，并保存结果快照用于审计';
 
