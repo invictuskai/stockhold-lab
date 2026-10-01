@@ -1,0 +1,15 @@
+{
+  "name": "stockhold-verification",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Executable verification of the StockHold design against a real MySQL 8.4 instance",
+  "scripts": {
+    "locks": "node locks.js",
+    "flashsale:batched": "node flashsale.js BATCHED",
+    "flashsale:sync": "node flashsale.js SYNC",
+    "bench": "node bench.js"
+  },
+  "dependencies": {
+    "mysql2": "^3.11.0"
+  }
+}

@@ -20,3 +20,6 @@ Thumbs.db
 
 # Local runtime data
 .mysql-data/
+
+# Verification scripts
+node_modules/

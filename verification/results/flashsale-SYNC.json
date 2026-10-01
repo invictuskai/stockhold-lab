@@ -1,0 +1,82 @@
+{
+  "mode": "SYNC",
+  "stock": 3000,
+  "requests": 31529,
+  "concurrency": 64,
+  "reserveWindowSec": "2.58",
+  "allRequestsSec": "2.90",
+  "reserveOkPerSec": 1038,
+  "facade": {
+    "refillTx": 10,
+    "flightJoins": 626,
+    "soldOutFastReject": 28342,
+    "retries": 572,
+    "deadlocks": 0,
+    "lockTimeouts": 0
+  },
+  "tally": {
+    "reserve_ok": 2676,
+    "reserve_err_BUYER_LIMIT_EXCEEDED": 264,
+    "claim_CLAIMED": 1046,
+    "reserve_replay": 124,
+    "claim_REPLAY": 59,
+    "cancel_CANCELLED": 417,
+    "hotkey_refill_REFILLED": 42,
+    "hotkey_refill_INSUFFICIENT": 2,
+    "reserve_err_INVENTORY_BUSY": 59,
+    "reserve_err_INSUFFICIENT_STOCK": 28406,
+    "expiry_EXPIRED": 1000,
+    "claim_err_RESERVATION_EXPIRED": 549,
+    "hotkey_refill_CONTENDED": 1,
+    "lateclaim_CLAIMED_LATE_REACQUIRED": 48,
+    "lateclaim_CLAIMED_LATE": 213,
+    "expiry_NOOP_CLAIMED": 43
+  },
+  "audit": {
+    "h": 1498,
+    "a": 508,
+    "cap": 1000,
+    "p": 508,
+    "ract": 0,
+    "claimed": 1502,
+    "dh": 0,
+    "da": 0,
+    "H": 1498,
+    "A": 508,
+    "valid": true,
+    "violations": []
+  },
+  "checks": [
+    {
+      "name": "不变量 H>=A>=0、A=P+R、P<=C、初始-已确认=H",
+      "pass": true,
+      "detail": "H=1498 A=508 P=508 R=0 已确认=1502"
+    },
+    {
+      "name": "不超卖：已确认 <= 初始库存",
+      "pass": true,
+      "detail": "已确认 1502 / 库存 3000"
+    },
+    {
+      "name": "限购：任何买家 ACTIVE+已确认 <= 2",
+      "pass": true,
+      "detail": "超限买家 0"
+    },
+    {
+      "name": "买家额度表与实际确认量一致、无残留 ACTIVE",
+      "pass": true,
+      "detail": "不一致 0"
+    },
+    {
+      "name": "结算后无残留分录",
+      "pass": true,
+      "detail": "残留 0"
+    },
+    {
+      "name": "只出现预期内的结果（无不变量异常、数据库错误、幂等重放不一致）",
+      "pass": true,
+      "detail": "无"
+    }
+  ],
+  "variant": "default"
+}

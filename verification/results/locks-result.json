@@ -1,0 +1,102 @@
+[
+  {
+    "name": "L1 复合主键：领取3个单位的行锁数",
+    "pass": true,
+    "detail": "3 个记录锁，索引=PRIMARY，模式=X,REC_NOT_GAP"
+  },
+  {
+    "name": "L2 SKIP LOCKED 跳过他人锁定行且不等待",
+    "pass": true,
+    "detail": "另一事务锁 3 行后，本事务拿到 7 行（期望 7）"
+  },
+  {
+    "name": "L3 RC 普通 COUNT 看得到未提交删除（补充只会少补）",
+    "pass": true,
+    "detail": "未提交删除时 COUNT=10，提交后=7"
+  },
+  {
+    "name": "L4 RC 下补充 INSERT 不被在途预留的删除阻塞",
+    "pass": true,
+    "detail": "INSERT 耗时 0ms"
+  },
+  {
+    "name": "L5 自增主键+二级索引：领取3个单位的行锁数（复现文章“每次两把锁”）",
+    "pass": true,
+    "detail": "6 个记录锁，索引=k_dim,PRIMARY"
+  },
+  {
+    "name": "L6 空池 REPEATABLE READ：补充 INSERT 被间隙锁阻塞",
+    "pass": true,
+    "detail": "空范围锁定读后持有 1 个记录/间隙锁（X,GAP），INSERT 锁等待超时"
+  },
+  {
+    "name": "L6 空池 READ COMMITTED：补充 INSERT 不被阻塞",
+    "pass": true,
+    "detail": "空范围锁定读后持有 0 个记录/间隙锁（无），INSERT 成功"
+  },
+  {
+    "name": "L7 UNION ALL 分支各自 FOR UPDATE SKIP LOCKED",
+    "pass": true,
+    "detail": "返回 5 行（item100=2, item200=3），与他人锁定行重叠=false，总记录锁=7"
+  },
+  {
+    "name": "C1 账本 A>H 被拒绝",
+    "pass": true,
+    "detail": "被拒绝 errno=3819"
+  },
+  {
+    "name": "C2 冻结状态缺原因被拒绝",
+    "pass": true,
+    "detail": "被拒绝 errno=3819"
+  },
+  {
+    "name": "C3 claim_deadline_at 超出 expires_at+120s 被拒绝",
+    "pass": true,
+    "detail": "被拒绝 errno=3819"
+  },
+  {
+    "name": "C4 宽限 120s 边界接受",
+    "pass": true,
+    "detail": "接受"
+  },
+  {
+    "name": "C5 CLAIMED 缺 claim_mode 被拒绝",
+    "pass": true,
+    "detail": "被拒绝 errno=3819"
+  },
+  {
+    "name": "C6 迟到确认 CLAIMED(LATE) 保留 expired_at 接受",
+    "pass": true,
+    "detail": "接受"
+  },
+  {
+    "name": "C7 CLAIMED(RESERVED) 带 expired_at 被拒绝",
+    "pass": true,
+    "detail": "被拒绝 errno=3819"
+  },
+  {
+    "name": "C8 CLAIM 分录 dH≠dA 被拒绝",
+    "pass": true,
+    "detail": "被拒绝 errno=3819"
+  },
+  {
+    "name": "C9 RELEASE 分录 dH≠0 被拒绝",
+    "pass": true,
+    "detail": "被拒绝 errno=3819"
+  },
+  {
+    "name": "C10 买家额度为负被拒绝",
+    "pass": true,
+    "detail": "被拒绝 errno=3819"
+  },
+  {
+    "name": "C11 回收数量用于正向调整被拒绝",
+    "pass": true,
+    "detail": "被拒绝 errno=3819"
+  },
+  {
+    "name": "Q1 同一买家并发首次下单在额度行上串行化",
+    "pass": true,
+    "detail": "最终 active_quantity=2（期望 2）"
+  }
+]

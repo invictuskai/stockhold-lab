@@ -1,0 +1,106 @@
+{
+  "SYNC": {
+    "reserve": {
+      "attempts": 4000,
+      "ok": 4000,
+      "perSec": 1819,
+      "p50": 16,
+      "p99": 38,
+      "max": 59,
+      "errors": {},
+      "refillTx": 4,
+      "retries": 115
+    },
+    "claim": {
+      "attempts": 4000,
+      "ok": 4000,
+      "perSec": 238,
+      "p50": 66,
+      "p99": 92,
+      "max": 116,
+      "errors": {}
+    },
+    "settled": 0,
+    "settleMs": 0,
+    "auditValid": true,
+    "violations": []
+  },
+  "BATCHED": {
+    "reserve": {
+      "attempts": 4000,
+      "ok": 4000,
+      "perSec": 1858,
+      "p50": 16,
+      "p99": 45,
+      "max": 54,
+      "errors": {},
+      "refillTx": 4,
+      "retries": 128
+    },
+    "claim": {
+      "attempts": 4000,
+      "ok": 4000,
+      "perSec": 1212,
+      "p50": 13,
+      "p99": 26,
+      "max": 36,
+      "errors": {}
+    },
+    "settled": 4000,
+    "settleMs": 54,
+    "auditValid": true,
+    "violations": []
+  },
+  "release_SYNC": {
+    "release": {
+      "attempts": 4000,
+      "ok": 4000,
+      "perSec": 241,
+      "p50": 65,
+      "p99": 80,
+      "max": 94,
+      "errors": {}
+    },
+    "auditValid": true
+  },
+  "release_BATCHED": {
+    "release": {
+      "attempts": 4000,
+      "ok": 4000,
+      "perSec": 1240,
+      "p50": 13,
+      "p99": 30,
+      "max": 32,
+      "errors": {}
+    },
+    "auditValid": true
+  },
+  "soldout_cache_0": {
+    "attempts": 5000,
+    "ok": 0,
+    "perSec": 5896,
+    "p50": 5,
+    "p99": 9,
+    "max": 10,
+    "errors": {
+      "INSUFFICIENT_STOCK": 5000
+    },
+    "refillTx": 158,
+    "flightJoins": 4842,
+    "fastRejects": 0
+  },
+  "soldout_cache_300": {
+    "attempts": 5000,
+    "ok": 0,
+    "perSec": 90909,
+    "p50": 0,
+    "p99": 1,
+    "max": 6,
+    "errors": {
+      "INSUFFICIENT_STOCK": 5000
+    },
+    "refillTx": 1,
+    "flightJoins": 31,
+    "fastRejects": 4968
+  }
+}
