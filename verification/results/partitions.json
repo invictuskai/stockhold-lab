@@ -1,0 +1,93 @@
+{
+  "requests": 21053,
+  "concurrency": 64,
+  "requestPhaseSec": "4.47",
+  "claimedLinesByPartition": {
+    "A": 147,
+    "B": 317,
+    "default": 837
+  },
+  "rules": {
+    "A_SHOE": 23,
+    "B_SHOE": 24,
+    "B_TOTAL": 25,
+    "SHOE_ALL": 26
+  },
+  "facade": {
+    "refillTx": 91,
+    "flightJoins": 1679,
+    "soldOutFastReject": 11414,
+    "retries": 1202,
+    "deadlocks": 0,
+    "lockTimeouts": 0
+  },
+  "tally": {
+    "hotkey_refill_CONTENDED": 195,
+    "reserve_ok": 1814,
+    "reserve_err_BUYER_LIMIT_EXCEEDED": 58,
+    "reserve_replay": 100,
+    "claim_CLAIMED": 1110,
+    "cancel_CANCELLED": 272,
+    "hotkey_refill_REFILLED": 65,
+    "settled_entries": 269,
+    "admin_topup_ok": 1,
+    "admin_close_CLOSED": 1,
+    "reserve_err_STOCK_PARTITION_CLOSED": 6951,
+    "admin_return_retry_ACTIVE_RESERVATIONS_REMAIN": 18,
+    "reserve_err_INSUFFICIENT_STOCK": 11982,
+    "hotkey_refill_CLOSED": 84,
+    "reserve_err_INVENTORY_BUSY": 148,
+    "hotkey_refill_INSUFFICIENT": 45,
+    "expiry_EXPIRED": 432,
+    "admin_return_ok": 1,
+    "lateclaim_CLAIMED_LATE_REACQUIRED": 147,
+    "lateclaim_err_LATE_CLAIM_INSUFFICIENT_STOCK": 25
+  },
+  "checks": [
+    {
+      "name": "每个维度：H>=A>=0、A=P+R、P<=C、操作记录合计−已确认=H",
+      "pass": true,
+      "detail": "100@0: ok (H=716 P=591 已确认=837) | 200@0: ok (H=380 P=380 已确认=0) | 100@7: ok (H=0 P=0 已确认=147) | 100@8: ok (H=48 P=48 已确认=252) | 200@8: ok (H=17 P=17 已确认=103)"
+    },
+    {
+      "name": "每个 SKU 跨分区：Σ(H)=初始−已确认，划拨两侧相互抵消",
+      "pass": true,
+      "detail": "SKU100: ΣH=764 期望=764 已确认=1236 | SKU200: ΣH=397 期望=397 已确认=103"
+    },
+    {
+      "name": "不超卖：每个 SKU 已确认 <= 初始库存",
+      "pass": true,
+      "detail": "鞋 1236/2000，袜 103/500"
+    },
+    {
+      "name": "限购（分区A的鞋≤1、分区B的鞋≤2、分区B合计≤2、鞋跨全部分区≤3）",
+      "pass": true,
+      "detail": "A_SHOE 超限 0 人，B_SHOE 超限 0 人，B_TOTAL 超限 0 人，SHOE_ALL 超限 0 人"
+    },
+    {
+      "name": "买家额度与预留占用明细逐条一致",
+      "pass": true,
+      "detail": "不一致 0"
+    },
+    {
+      "name": "分区 A 已关闭、余量已退回（H=0、池为空、无 ACTIVE）",
+      "pass": true,
+      "detail": "状态=CLOSED H=0 P=0 R=0 退回=453（回收池单位 379）"
+    },
+    {
+      "name": "结算后无残留分录",
+      "pass": true,
+      "detail": "残留 0"
+    },
+    {
+      "name": "只出现预期内的结果码",
+      "pass": true,
+      "detail": "无"
+    },
+    {
+      "name": "无死锁（InnoDB lock_deadlocks 计数不变）",
+      "pass": true,
+      "detail": "前 0 后 0"
+    }
+  ]
+}

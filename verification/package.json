@@ -7,6 +7,8 @@
     "locks": "node locks.js",
     "flashsale:batched": "node flashsale.js BATCHED",
     "flashsale:sync": "node flashsale.js SYNC",
+    "partitions": "node partitions.js",
+    "partition-edges": "node partition-edges.js",
     "bench": "node bench.js"
   },
   "dependencies": {

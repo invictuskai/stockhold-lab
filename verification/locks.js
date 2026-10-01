@@ -11,8 +11,7 @@ async function locksOf(obs, table) {
   return rows;
 }
 async function reset(c) {
-  for (const t of ['reservation_units', 'inventory_ledger', 'reservations', 'reserved_quantities', 'ledger_pending_entries', 'buyer_quotas', 'item_purchase_limits', 'inventory_operations'])
-    await c.query(`DELETE FROM ${t}`);
+  for (const t of require('./lib').TABLES) await c.query(`DELETE FROM ${t}`);
   await c.query('DROP TABLE IF EXISTS units_autoinc');
 }
 async function seedUnits(c, item, n) {
@@ -26,36 +25,36 @@ async function seedUnits(c, item, n) {
   // L1: composite PK -> one record lock per claimed unit
   await seedUnits(obs, 100, 10);
   await a.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED'); await a.beginTransaction();
-  await a.query('SELECT unit_id FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND location_id=1 ORDER BY unit_id LIMIT 3 FOR UPDATE SKIP LOCKED');
+  await a.query('SELECT unit_id FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND stock_partition_id=1 ORDER BY unit_id LIMIT 3 FOR UPDATE SKIP LOCKED');
   let l = await locksOf(obs, 'reservation_units');
   record('L1 复合主键：领取3个单位的行锁数', l.length === 3 && l.every((x) => x.idx === 'PRIMARY'), `${l.length} 个记录锁，索引=${[...new Set(l.map((x) => x.idx))]}，模式=${[...new Set(l.map((x) => x.mode))]}`);
 
   // L4 (while a holds 3 locked rows): SKIP LOCKED from b returns other rows
   await b.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED'); await b.beginTransaction();
-  const [bRows] = await b.query('SELECT unit_id FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND location_id=1 ORDER BY unit_id LIMIT 10 FOR UPDATE SKIP LOCKED');
+  const [bRows] = await b.query('SELECT unit_id FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND stock_partition_id=1 ORDER BY unit_id LIMIT 10 FOR UPDATE SKIP LOCKED');
   record('L2 SKIP LOCKED 跳过他人锁定行且不等待', bRows.length === 7, `另一事务锁 3 行后，本事务拿到 ${bRows.length} 行（期望 7）`);
   await b.rollback();
 
   // L5: uncommitted deletes stay visible to a plain RC COUNT (refill over-counts, never under-counts)
-  const [locked] = await a.query('SELECT unit_id FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND location_id=1 ORDER BY unit_id LIMIT 3 FOR UPDATE');
-  await a.query('DELETE FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND location_id=1 AND unit_id IN (?,?,?)', locked.map((r) => r.unit_id));
+  const [locked] = await a.query('SELECT unit_id FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND stock_partition_id=1 ORDER BY unit_id LIMIT 3 FOR UPDATE');
+  await a.query('DELETE FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND stock_partition_id=1 AND unit_id IN (?,?,?)', locked.map((r) => r.unit_id));
   await b.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED'); await b.beginTransaction();
-  const [[c1]] = await b.query('SELECT COUNT(*) n FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND location_id=1');
+  const [[c1]] = await b.query('SELECT COUNT(*) n FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND stock_partition_id=1');
   // refill-style INSERT by b must not block on a's deletes under RC
   const t0 = Date.now();
   await b.query('INSERT INTO reservation_units VALUES (1,100,1,?)', [uuid()]);
   const insMs = Date.now() - t0;
   await b.rollback();
   await a.commit();
-  const [[c2]] = await obs.query('SELECT COUNT(*) n FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND location_id=1');
+  const [[c2]] = await obs.query('SELECT COUNT(*) n FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND stock_partition_id=1');
   record('L3 RC 普通 COUNT 看得到未提交删除（补充只会少补）', Number(c1.n) === 10 && Number(c2.n) === 7, `未提交删除时 COUNT=${c1.n}，提交后=${c2.n}`);
   record('L4 RC 下补充 INSERT 不被在途预留的删除阻塞', insMs < 500, `INSERT 耗时 ${insMs}ms`);
 
   // L6: auto-increment PK + secondary index -> two locks per unit (article's first prototype)
-  await obs.query('CREATE TABLE units_autoinc (id BIGINT AUTO_INCREMENT PRIMARY KEY, shop_id BIGINT, inventory_item_id BIGINT, location_id BIGINT, KEY k_dim (shop_id, inventory_item_id, location_id))');
-  for (let i = 0; i < 10; i++) await obs.query('INSERT INTO units_autoinc (shop_id, inventory_item_id, location_id) VALUES (1,100,1)');
+  await obs.query('CREATE TABLE units_autoinc (id BIGINT AUTO_INCREMENT PRIMARY KEY, shop_id BIGINT, inventory_item_id BIGINT, stock_partition_id BIGINT, KEY k_dim (shop_id, inventory_item_id, stock_partition_id))');
+  for (let i = 0; i < 10; i++) await obs.query('INSERT INTO units_autoinc (shop_id, inventory_item_id, stock_partition_id) VALUES (1,100,1)');
   await a.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED'); await a.beginTransaction();
-  await a.query('SELECT id FROM units_autoinc WHERE shop_id=1 AND inventory_item_id=100 AND location_id=1 ORDER BY id LIMIT 3 FOR UPDATE SKIP LOCKED');
+  await a.query('SELECT id FROM units_autoinc WHERE shop_id=1 AND inventory_item_id=100 AND stock_partition_id=1 ORDER BY id LIMIT 3 FOR UPDATE SKIP LOCKED');
   l = await locksOf(obs, 'units_autoinc');
   record('L5 自增主键+二级索引：领取3个单位的行锁数（复现文章“每次两把锁”）', l.length === 6, `${l.length} 个记录锁，索引=${[...new Set(l.map((x) => x.idx))]}`);
   await a.rollback();
@@ -66,7 +65,7 @@ async function seedUnits(c, item, n) {
   await seedUnits(obs, 50, 3);  // and before it
   for (const iso of ['REPEATABLE READ', 'READ COMMITTED']) {
     await a.query(`SET TRANSACTION ISOLATION LEVEL ${iso}`); await a.beginTransaction();
-    await a.query('SELECT unit_id FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND location_id=1 ORDER BY unit_id LIMIT 1 FOR UPDATE SKIP LOCKED');
+    await a.query('SELECT unit_id FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND stock_partition_id=1 ORDER BY unit_id LIMIT 1 FOR UPDATE SKIP LOCKED');
     const gl = await locksOf(obs, 'reservation_units');
     let blocked = false;
     try { await b.query('INSERT INTO reservation_units VALUES (1,100,1,?)', [uuid()]); } catch (e) { blocked = e.errno === 1205; }
@@ -81,12 +80,12 @@ async function seedUnits(c, item, n) {
   await obs.query('DELETE FROM reservation_units');
   await seedUnits(obs, 100, 5); await seedUnits(obs, 200, 5);
   await a.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED'); await a.beginTransaction();
-  const [aLocked] = await a.query('SELECT unit_id FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND location_id=1 ORDER BY unit_id LIMIT 2 FOR UPDATE');
+  const [aLocked] = await a.query('SELECT unit_id FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND stock_partition_id=1 ORDER BY unit_id LIMIT 2 FOR UPDATE');
   await b.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED'); await b.beginTransaction();
   const [u] = await b.query(
-    `(SELECT inventory_item_id, unit_id FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND location_id=1 ORDER BY unit_id LIMIT 2 FOR UPDATE SKIP LOCKED)
+    `(SELECT inventory_item_id, unit_id FROM reservation_units WHERE shop_id=1 AND inventory_item_id=100 AND stock_partition_id=1 ORDER BY unit_id LIMIT 2 FOR UPDATE SKIP LOCKED)
      UNION ALL
-     (SELECT inventory_item_id, unit_id FROM reservation_units WHERE shop_id=1 AND inventory_item_id=200 AND location_id=1 ORDER BY unit_id LIMIT 3 FOR UPDATE SKIP LOCKED)`);
+     (SELECT inventory_item_id, unit_id FROM reservation_units WHERE shop_id=1 AND inventory_item_id=200 AND stock_partition_id=1 ORDER BY unit_id LIMIT 3 FOR UPDATE SKIP LOCKED)`);
   const overlap = u.some((r) => aLocked.some((x) => Buffer.compare(x.unit_id, r.unit_id) === 0));
   const all = await locksOf(obs, 'reservation_units');
   record('L7 UNION ALL 分支各自 FOR UPDATE SKIP LOCKED', u.length === 5 && !overlap && all.length === 7,
@@ -101,8 +100,8 @@ async function seedUnits(c, item, n) {
   const expectOk = async (name, sql, params) => {
     try { await obs.query(sql, params); record(name, true, '接受'); } catch (e) { record(name, false, e.message); }
   };
-  await expectFail('C1 账本 A>H 被拒绝', 'INSERT INTO inventory_ledger (shop_id,inventory_item_id,location_id,on_hand_quantity,allocated_quantity) VALUES (1,1,1,5,6)');
-  await expectFail('C2 冻结状态缺原因被拒绝', "INSERT INTO inventory_ledger (shop_id,inventory_item_id,location_id,on_hand_quantity,status) VALUES (1,1,1,5,'FROZEN')");
+  await expectFail('C1 账本 A>H 被拒绝', 'INSERT INTO inventory_ledger (shop_id,inventory_item_id,stock_partition_id,on_hand_quantity,allocated_quantity) VALUES (1,1,1,5,6)');
+  await expectFail('C2 冻结状态缺原因被拒绝', "INSERT INTO inventory_ledger (shop_id,inventory_item_id,stock_partition_id,on_hand_quantity,status) VALUES (1,1,1,5,'FROZEN')");
   const ins = (status, extra) =>
     `INSERT INTO reservations (shop_id,reservation_id,idempotency_key,request_hash,status,ttl_seconds,total_quantity,line_count,expires_at,claim_deadline_at${extra.cols}) VALUES (1,?,?,?, '${status}', 60,1,1, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6) + INTERVAL ${extra.grace} SECOND${extra.vals})`;
   const p = () => [uuid(), 'k' + Math.random(), Buffer.alloc(32)];
@@ -111,17 +110,26 @@ async function seedUnits(c, item, n) {
   await expectFail('C5 CLAIMED 缺 claim_mode 被拒绝', ins('CLAIMED', { grace: 30, cols: ',payment_reference,claimed_at', vals: ",'pay1',UTC_TIMESTAMP(6)" }), p());
   await expectOk('C6 迟到确认 CLAIMED(LATE) 保留 expired_at 接受', ins('CLAIMED', { grace: 30, cols: ',payment_reference,claimed_at,claim_mode,expired_at', vals: ",'pay2',UTC_TIMESTAMP(6),'LATE',UTC_TIMESTAMP(6)" }), p());
   await expectFail('C7 CLAIMED(RESERVED) 带 expired_at 被拒绝', ins('CLAIMED', { grace: 30, cols: ',payment_reference,claimed_at,claim_mode,expired_at', vals: ",'pay3',UTC_TIMESTAMP(6),'RESERVED',UTC_TIMESTAMP(6)" }), p());
-  await expectFail('C8 CLAIM 分录 dH≠dA 被拒绝', "INSERT INTO ledger_pending_entries (shop_id,inventory_item_id,location_id,reservation_id,entry_type,on_hand_delta,allocated_delta) VALUES (1,1,1,?,'CLAIM',0,-1)", [uuid()]);
-  await expectFail('C9 RELEASE 分录 dH≠0 被拒绝', "INSERT INTO ledger_pending_entries (shop_id,inventory_item_id,location_id,reservation_id,entry_type,on_hand_delta,allocated_delta) VALUES (1,1,1,?,'RELEASE',-1,-1)", [uuid()]);
-  await expectFail('C10 买家额度为负被拒绝', "INSERT INTO buyer_quotas (shop_id,inventory_item_id,buyer_id,active_quantity) VALUES (1,1,'b',-1)");
-  await expectFail('C11 回收数量用于正向调整被拒绝', "INSERT INTO inventory_operations (shop_id,operation_id,request_hash,operation_type,inventory_item_id,location_id,delta_quantity,on_hand_after,allocated_after,pool_capacity_after,pool_reclaimed_quantity) VALUES (1,?,?,'ADJUST',1,1,5,10,0,1000,3)", [uuid(), Buffer.alloc(32)]);
+  await expectFail('C8 CLAIM 分录 dH≠dA 被拒绝', "INSERT INTO ledger_pending_entries (shop_id,inventory_item_id,stock_partition_id,reservation_id,entry_type,on_hand_delta,allocated_delta) VALUES (1,1,1,?,'CLAIM',0,-1)", [uuid()]);
+  await expectFail('C9 RELEASE 分录 dH≠0 被拒绝', "INSERT INTO ledger_pending_entries (shop_id,inventory_item_id,stock_partition_id,reservation_id,entry_type,on_hand_delta,allocated_delta) VALUES (1,1,1,?,'RELEASE',-1,-1)", [uuid()]);
+  await expectFail('C10 买家额度为负被拒绝', "INSERT INTO buyer_quotas (shop_id,rule_id,buyer_id,active_quantity) VALUES (1,1,'b',-1)");
+  await expectFail('C12 默认分区 0 不能关闭', "INSERT INTO stock_partitions (shop_id,stock_partition_id,status,closed_at) VALUES (1,0,'CLOSED',UTC_TIMESTAMP(6))");
+  await expectOk('C13 非默认分区可以关闭', "INSERT INTO stock_partitions (shop_id,stock_partition_id,status,closed_at) VALUES (1,7,'CLOSED',UTC_TIMESTAMP(6))");
+  await expectFail('C14 SKU 跨分区规则必须用分区哨兵 -1', "INSERT INTO purchase_limit_rules (shop_id,scope_type,stock_partition_id,inventory_item_id,per_buyer_limit) VALUES (1,'ITEM_ALL_PARTITIONS',0,100,1)");
+  await expectFail('C15 分区合计规则的 SKU 必须为 0', "INSERT INTO purchase_limit_rules (shop_id,scope_type,stock_partition_id,inventory_item_id,per_buyer_limit) VALUES (1,'PARTITION_TOTAL',7,100,1)");
+  await expectOk('C16 三种范围的合法规则', "INSERT INTO purchase_limit_rules (shop_id,scope_type,stock_partition_id,inventory_item_id,per_buyer_limit) VALUES (1,'PARTITION_ITEM',7,100,1),(1,'PARTITION_TOTAL',7,0,2),(1,'ITEM_ALL_PARTITIONS',-1,100,3)");
+  try { await obs.query("INSERT INTO purchase_limit_rules (shop_id,scope_type,stock_partition_id,inventory_item_id,per_buyer_limit) VALUES (1,'PARTITION_ITEM',7,100,5)"); record('C17 同一范围不能重复建规则', false, '未被拒绝'); }
+  catch (e) { record('C17 同一范围不能重复建规则', e.errno === 1062, `被拒绝 errno=${e.errno}`); }
+  await expectFail('C18 划入行的 delta 必须为正', "INSERT INTO inventory_operations (shop_id,operation_id,line_no,request_hash,operation_type,inventory_item_id,stock_partition_id,delta_quantity,on_hand_after,allocated_after,pool_capacity_after) VALUES (1,?,2,?,'TRANSFER_IN',1,7,-5,0,0,1)", [uuid(), Buffer.alloc(32)]);
+  await expectFail('C19 划出行必须是 line_no=1', "INSERT INTO inventory_operations (shop_id,operation_id,line_no,request_hash,operation_type,inventory_item_id,stock_partition_id,delta_quantity,on_hand_after,allocated_after,pool_capacity_after) VALUES (1,?,2,?,'TRANSFER_OUT',1,0,-5,0,0,1)", [uuid(), Buffer.alloc(32)]);
+  await expectFail('C11 回收数量用于正向调整被拒绝', "INSERT INTO inventory_operations (shop_id,operation_id,request_hash,operation_type,inventory_item_id,stock_partition_id,delta_quantity,on_hand_after,allocated_after,pool_capacity_after,pool_reclaimed_quantity) VALUES (1,?,?,'ADJUST',1,1,5,10,0,1000,3)", [uuid(), Buffer.alloc(32)]);
 
   // Q1: buyer quota ODKU — same buyer concurrent first insert serializes, no deadlock
   await a.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED'); await a.beginTransaction();
-  await a.query("INSERT INTO buyer_quotas (shop_id,inventory_item_id,buyer_id,active_quantity) VALUES (1,9,'u1',1) ON DUPLICATE KEY UPDATE active_quantity=active_quantity+1");
+  await a.query("INSERT INTO buyer_quotas (shop_id,rule_id,buyer_id,active_quantity) VALUES (1,9,'u1',1) ON DUPLICATE KEY UPDATE active_quantity=active_quantity+1");
   await b.query('SET SESSION innodb_lock_wait_timeout=5');
   await b.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED'); await b.beginTransaction();
-  const pB = b.query("INSERT INTO buyer_quotas (shop_id,inventory_item_id,buyer_id,active_quantity) VALUES (1,9,'u1',1) ON DUPLICATE KEY UPDATE active_quantity=active_quantity+1");
+  const pB = b.query("INSERT INTO buyer_quotas (shop_id,rule_id,buyer_id,active_quantity) VALUES (1,9,'u1',1) ON DUPLICATE KEY UPDATE active_quantity=active_quantity+1");
   await sleep(300);
   await a.commit();
   await pB; await b.commit();

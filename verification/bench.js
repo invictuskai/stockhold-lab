@@ -2,7 +2,7 @@
 'use strict';
 const crypto = require('crypto');
 const L = require('./lib');
-const K = { shop: 1, item: 100, loc: 1 };
+const K = { shop: 1, item: 100, part: 0 };
 const N = Number(process.env.N || 4000);
 const CONC = Number(process.env.CONC || 32);
 
@@ -21,11 +21,10 @@ async function runConcurrent(items, conc, fn) {
   return { attempts: lat.length, ok, perSec: Math.round(lat.length / sec), p50: pct(lat, 0.5), p99: pct(lat, 0.99), max: Math.max(...lat), errors };
 }
 async function resetLedger(c, stock, mode) {
-  for (const t of ['reservation_units', 'inventory_ledger', 'reservations', 'reserved_quantities', 'ledger_pending_entries', 'buyer_quotas', 'item_purchase_limits'])
-    await c.query(`DELETE FROM ${t}`);
-  await c.query('INSERT INTO inventory_ledger (shop_id,inventory_item_id,location_id,on_hand_quantity,pool_capacity,settlement_mode) VALUES (?,?,?,?,1000,?)', [K.shop, K.item, K.loc, stock, mode]);
+  await L.resetAll(c, K.shop);
+  await c.query('INSERT INTO inventory_ledger (shop_id,inventory_item_id,stock_partition_id,on_hand_quantity,pool_capacity,settlement_mode) VALUES (?,?,?,?,1000,?)', [K.shop, K.item, K.part, stock, mode]);
 }
-const mkReq = (i, qty = 1) => ({ shop: K.shop, idem: 'b' + i + '-' + Math.random(), hash: crypto.randomBytes(32), ttl: 900, grace: 120, lines: [{ item: K.item, loc: K.loc, qty }] });
+const mkReq = (i, qty = 1) => ({ shop: K.shop, idem: 'b' + i + '-' + Math.random(), hash: crypto.randomBytes(32), ttl: 900, grace: 120, lines: [{ item: K.item, part: K.part, qty }] });
 
 (async () => {
   const c = await L.conn();

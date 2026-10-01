@@ -27,7 +27,7 @@
   {
     "name": "L6 空池 REPEATABLE READ：补充 INSERT 被间隙锁阻塞",
     "pass": true,
-    "detail": "空范围锁定读后持有 1 个记录/间隙锁（X,GAP），INSERT 锁等待超时"
+    "detail": "空范围锁定读后持有 8 个记录/间隙锁（X,GAP,X,X,X,X,X,X,X），INSERT 锁等待超时"
   },
   {
     "name": "L6 空池 READ COMMITTED：补充 INSERT 不被阻塞",
@@ -86,6 +86,46 @@
   },
   {
     "name": "C10 买家额度为负被拒绝",
+    "pass": true,
+    "detail": "被拒绝 errno=3819"
+  },
+  {
+    "name": "C12 默认分区 0 不能关闭",
+    "pass": true,
+    "detail": "被拒绝 errno=3819"
+  },
+  {
+    "name": "C13 非默认分区可以关闭",
+    "pass": true,
+    "detail": "接受"
+  },
+  {
+    "name": "C14 SKU 跨分区规则必须用分区哨兵 -1",
+    "pass": true,
+    "detail": "被拒绝 errno=3819"
+  },
+  {
+    "name": "C15 分区合计规则的 SKU 必须为 0",
+    "pass": true,
+    "detail": "被拒绝 errno=3819"
+  },
+  {
+    "name": "C16 三种范围的合法规则",
+    "pass": true,
+    "detail": "接受"
+  },
+  {
+    "name": "C17 同一范围不能重复建规则",
+    "pass": true,
+    "detail": "被拒绝 errno=1062"
+  },
+  {
+    "name": "C18 划入行的 delta 必须为正",
+    "pass": true,
+    "detail": "被拒绝 errno=3819"
+  },
+  {
+    "name": "C19 划出行必须是 line_no=1",
     "pass": true,
     "detail": "被拒绝 errno=3819"
   },

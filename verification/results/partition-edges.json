@@ -1,0 +1,47 @@
+[
+  {
+    "name": "E1 划出时 F=0、池已满：回收池单位后划拨",
+    "pass": true,
+    "detail": "回收 30，源 H=70 P=70，审计 true"
+  },
+  {
+    "name": "E2 缺口被 ACTIVE 预留占用时拒绝划拨",
+    "pass": true,
+    "detail": "错误=STOCK_ALLOCATED，划拨记录仍只有 E1 的 2 行=2，审计 true"
+  },
+  {
+    "name": "E3 划拨幂等：同一 operation_id 重放不会重复划拨",
+    "pass": true,
+    "detail": "重放错误=ER_DUP_ENTRY，分区 7 H=32（期望 32）"
+  },
+  {
+    "name": "E4 关闭后：拒绝预留、拒绝补充、拒绝划入",
+    "pass": true,
+    "detail": "预留=STOCK_PARTITION_CLOSED 补充=CLOSED 划入=STOCK_PARTITION_CLOSED"
+  },
+  {
+    "name": "E5 单位被在途预留锁住时退回返回 BUSY，释放后退回成功",
+    "pass": true,
+    "detail": "第一次=INVENTORY_BUSY，第二次退回 32（回收 32），分区 7 H=0 P=0，SKU 合计审计 true"
+  },
+  {
+    "name": "E6 仍有 ACTIVE 预留时拒绝退回；关闭后已有预留仍可确认",
+    "pass": true,
+    "detail": "退回=ACTIVE_RESERVATIONS_REMAIN，确认=CLAIMED，之后退回 4"
+  },
+  {
+    "name": "E7 分区退回后迟到确认：无法兑现，返回 LATE_CLAIM_INSUFFICIENT_STOCK",
+    "pass": true,
+    "detail": "结果=LATE_CLAIM_INSUFFICIENT_STOCK"
+  },
+  {
+    "name": "E8 限购：缺 buyerId 拒绝；超限拒绝；中途改值 / 停用 / 新增规则后，额度按占用明细原路退回",
+    "pass": true,
+    "detail": "缺buyer=BUYER_ID_REQUIRED 超限=BUYER_LIMIT_EXCEEDED；alice 额度 active=0 claimed=1；事后新增规则未被误扣（额度行 0）；不一致 0"
+  },
+  {
+    "name": "E9 全部维度与 SKU 合计审计",
+    "pass": true,
+    "detail": "维度 true,true,true,true，SKU ΣH=98 期望=98"
+  }
+]

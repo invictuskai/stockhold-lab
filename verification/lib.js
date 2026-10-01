@@ -56,8 +56,8 @@ async function txn(pool, fn) {
   }
 }
 
-const keyStr = (k) => `${k.shop}:${k.item}:${k.loc}`;
-const cmpKey = (a, b) => a.item - b.item || a.loc - b.loc;
+const keyStr = (k) => `${k.shop}:${k.item}:${k.part}`;
+const cmpKey = (a, b) => a.item - b.item || a.part - b.part;
 
 // ---------------- settlement (§7.12 / BATCHED) ----------------
 // Caller must hold the ledger row lock for `k`.
@@ -66,21 +66,21 @@ async function settleInline(c, k, maxBatches = 20) {
   for (let b = 0; b < maxBatches; b++) {
     const [rows] = await c.query(
       'SELECT reservation_id, entry_type, on_hand_delta, allocated_delta FROM ledger_pending_entries ' +
-        'WHERE shop_id=? AND inventory_item_id=? AND location_id=? ORDER BY reservation_id, entry_type LIMIT 500',
-      [k.shop, k.item, k.loc]);
+        'WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=? ORDER BY reservation_id, entry_type LIMIT 500',
+      [k.shop, k.item, k.part]);
     if (rows.length === 0) break;
     let dH = 0, dA = 0;
     for (const r of rows) { dH += Number(r.on_hand_delta); dA += Number(r.allocated_delta); }
     const [u] = await c.query(
       'UPDATE inventory_ledger SET on_hand_quantity=on_hand_quantity+?, allocated_quantity=allocated_quantity+? ' +
-        'WHERE shop_id=? AND inventory_item_id=? AND location_id=? AND on_hand_quantity+? >= 0 AND allocated_quantity+? >= 0',
-      [dH, dA, k.shop, k.item, k.loc, dH, dA]);
+        'WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=? AND on_hand_quantity+? >= 0 AND allocated_quantity+? >= 0',
+      [dH, dA, k.shop, k.item, k.part, dH, dA]);
     if (u.affectedRows !== 1) throw new InvariantViolation('settle update ' + keyStr(k));
     const tuples = rows.map(() => '(?,?)').join(',');
-    const params = [k.shop, k.item, k.loc];
+    const params = [k.shop, k.item, k.part];
     for (const r of rows) params.push(r.reservation_id, r.entry_type);
     const [d] = await c.query(
-      `DELETE FROM ledger_pending_entries WHERE shop_id=? AND inventory_item_id=? AND location_id=? AND (reservation_id, entry_type) IN (${tuples})`,
+      `DELETE FROM ledger_pending_entries WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=? AND (reservation_id, entry_type) IN (${tuples})`,
       params);
     if (d.affectedRows !== rows.length) throw new InvariantViolation('settle delete count ' + keyStr(k));
     settled += rows.length;
@@ -92,29 +92,37 @@ async function settleInline(c, k, maxBatches = 20) {
 async function lockLedger(c, k) {
   const [[l]] = await c.query(
     'SELECT on_hand_quantity h, allocated_quantity a, pool_capacity cap, status, settlement_mode mode FROM inventory_ledger ' +
-      'WHERE shop_id=? AND inventory_item_id=? AND location_id=? FOR UPDATE', [k.shop, k.item, k.loc]);
+      'WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=? FOR UPDATE', [k.shop, k.item, k.part]);
   if (!l) throw new BizError('INVENTORY_NOT_FOUND');
   return { h: Number(l.h), a: Number(l.a), cap: Number(l.cap), status: l.status, mode: l.mode };
 }
 
 // ---------------- refill (§7.4) ----------------
+async function partitionStatus(c, shop, part) {
+  const [[p]] = await c.query('SELECT status FROM stock_partitions WHERE shop_id=? AND stock_partition_id=?', [shop, part]);
+  if (!p) throw new BizError('STOCK_PARTITION_NOT_FOUND', { part });
+  return p.status;
+}
+
 async function refillTx(c, k, need) {
   let l = await lockLedger(c, k);
   if (l.status === 'FROZEN') return { outcome: 'FROZEN' };
+  // closed partitions accept no new allocation (plain read; closing is a business gate, not an invariant)
+  if ((await partitionStatus(c, k.shop, k.part)) === 'CLOSED') return { outcome: 'CLOSED' };
   if (await settleInline(c, k)) l = await lockLedger(c, k);
   const [[{ p }]] = await c.query(
-    'SELECT COUNT(*) p FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND location_id=?', [k.shop, k.item, k.loc]);
+    'SELECT COUNT(*) p FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=?', [k.shop, k.item, k.part]);
   const observed = Number(p);
   const free = l.h - l.a;
   const refill = Math.max(0, Math.min(l.cap - observed, free));
   if (refill > 0) {
-    await c.query('UPDATE inventory_ledger SET allocated_quantity=allocated_quantity+? WHERE shop_id=? AND inventory_item_id=? AND location_id=?',
-      [refill, k.shop, k.item, k.loc]);
+    await c.query('UPDATE inventory_ledger SET allocated_quantity=allocated_quantity+? WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=?',
+      [refill, k.shop, k.item, k.part]);
     const ids = Array.from({ length: refill }, uuid).sort(Buffer.compare);
     for (let i = 0; i < ids.length; i += 100) {
       const chunk = ids.slice(i, i + 100);
-      await c.query('INSERT INTO reservation_units (shop_id, inventory_item_id, location_id, unit_id) VALUES ' + chunk.map(() => '(?,?,?,?)').join(','),
-        chunk.flatMap((id) => [k.shop, k.item, k.loc, id]));
+      await c.query('INSERT INTO reservation_units (shop_id, inventory_item_id, stock_partition_id, unit_id) VALUES ' + chunk.map(() => '(?,?,?,?)').join(','),
+        chunk.flatMap((id) => [k.shop, k.item, k.part, id]));
     }
   }
   const potential = free + observed;
@@ -123,18 +131,33 @@ async function refillTx(c, k, need) {
   return { outcome: 'CONTENDED', potential, refill };
 }
 
-// ---------------- buyer quota ----------------
-async function limitsFor(c, shop, items) {
-  if (items.length === 0) return new Map();
+// ---------------- purchase limits (§7.13) ----------------
+// Returns [[ruleId, {lim, qty}], ...] sorted by rule_id: every ACTIVE rule the lines fall under, with the quantity counted.
+async function matchRules(c, shop, lines) {
+  const parts = [...new Set(lines.map((l) => l.part))];
+  const items = [...new Set(lines.map((l) => l.item))];
   const [rows] = await c.query(
-    `SELECT inventory_item_id item, per_buyer_limit lim FROM item_purchase_limits WHERE shop_id=? AND inventory_item_id IN (${items.map(() => '?').join(',')})`,
-    [shop, ...items]);
-  return new Map(rows.map((r) => [Number(r.item), Number(r.lim)]));
+    `SELECT rule_id, scope_type, stock_partition_id part, inventory_item_id item, per_buyer_limit lim FROM purchase_limit_rules
+      WHERE shop_id=? AND status='ACTIVE' AND (
+            (scope_type='PARTITION_ITEM' AND stock_partition_id IN (?) AND inventory_item_id IN (?))
+         OR (scope_type='PARTITION_TOTAL' AND stock_partition_id IN (?) AND inventory_item_id=0)
+         OR (scope_type='ITEM_ALL_PARTITIONS' AND stock_partition_id=-1 AND inventory_item_id IN (?)))`,
+    [shop, parts, items, parts, items]);
+  const out = [];
+  for (const r of rows) {
+    let qty = 0;
+    for (const l of lines) {
+      if (r.scope_type === 'PARTITION_ITEM' && Number(r.part) === l.part && Number(r.item) === l.item) qty += l.qty;
+      else if (r.scope_type === 'PARTITION_TOTAL' && Number(r.part) === l.part) qty += l.qty;
+      else if (r.scope_type === 'ITEM_ALL_PARTITIONS' && Number(r.item) === l.item) qty += l.qty;
+    }
+    if (qty > 0) out.push([Number(r.rule_id), { lim: Number(r.lim), qty }]);
+  }
+  return out.sort((a, b) => a[0] - b[0]);
 }
-function qtyByItem(lines) {
-  const m = new Map();
-  for (const l of lines) m.set(l.item, (m.get(l.item) || 0) + l.qty);
-  return [...m.entries()].sort((a, b) => a[0] - b[0]);
+async function usagesOf(c, shop, rid) {
+  const [rows] = await c.query('SELECT rule_id, quantity FROM reservation_quota_usages WHERE shop_id=? AND reservation_id=? ORDER BY rule_id', [shop, rid]);
+  return rows.map((r) => ({ rule: Number(r.rule_id), qty: Number(r.quantity) }));
 }
 
 // ---------------- reserve (§7.2) ----------------
@@ -142,12 +165,16 @@ function qtyByItem(lines) {
 // Inserting the header first made every PoolNotReady rollback leave a delete-marked unique-index entry; the retry
 // with the same idempotency key then took S gap locks during the duplicate check and deadlocked with neighbours.
 async function reserveTx(c, req) {
+  // partition gate: plain read, no lock (a reserve racing a close is still a valid reservation)
+  for (const part of new Set(req.lines.map((l) => l.part))) {
+    if ((await partitionStatus(c, req.shop, part)) === 'CLOSED') throw new BizError('STOCK_PARTITION_CLOSED', { part });
+  }
   const picked = [];
   for (const l of req.lines) {
     const [rows] = await c.query(
-      'SELECT unit_id FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND location_id=? ORDER BY unit_id LIMIT ? FOR UPDATE SKIP LOCKED',
-      [req.shop, l.item, l.loc, l.qty]);
-    if (rows.length < l.qty) throw new PoolNotReady({ shop: req.shop, item: l.item, loc: l.loc }, l.qty);
+      'SELECT unit_id FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=? ORDER BY unit_id LIMIT ? FOR UPDATE SKIP LOCKED',
+      [req.shop, l.item, l.part, l.qty]);
+    if (rows.length < l.qty) throw new PoolNotReady({ shop: req.shop, item: l.item, part: l.part }, l.qty);
     picked.push(rows.map((r) => r.unit_id));
   }
   const rid = uuid();
@@ -156,29 +183,26 @@ async function reserveTx(c, req) {
     'INSERT INTO reservations (shop_id, reservation_id, idempotency_key, request_hash, status, buyer_id, ttl_seconds, total_quantity, line_count, expires_at, claim_deadline_at) ' +
       "VALUES (?,?,?,?, 'ACTIVE', ?,?,?,?, UTC_TIMESTAMP(6) + INTERVAL ? SECOND, UTC_TIMESTAMP(6) + INTERVAL ? SECOND)",
     [req.shop, rid, req.idem, req.hash, req.buyer || null, req.ttl, total, req.lines.length, req.ttl, req.ttl + req.grace]);
-  if (req.buyer) {
-    const per = qtyByItem(req.lines);
-    const limits = await limitsFor(c, req.shop, per.map((x) => x[0]));
-    for (const [item, qty] of per) {
-      const lim = limits.get(item);
-      if (lim === undefined) continue;
-      await c.query('INSERT INTO buyer_quotas (shop_id, inventory_item_id, buyer_id, active_quantity) VALUES (?,?,?,?) ' +
-        'ON DUPLICATE KEY UPDATE active_quantity = active_quantity + ?', [req.shop, item, req.buyer, qty, qty]);
-      const [[q]] = await c.query('SELECT active_quantity + claimed_quantity t FROM buyer_quotas WHERE shop_id=? AND inventory_item_id=? AND buyer_id=?',
-        [req.shop, item, req.buyer]);
-      if (Number(q.t) > lim) throw new BizError('BUYER_LIMIT_EXCEEDED', { item });
-    }
+  const rules = await matchRules(c, req.shop, req.lines);
+  if (rules.length && !req.buyer) throw new BizError('BUYER_ID_REQUIRED');
+  for (const [rule, { lim, qty }] of rules) { // rule_id ascending
+    await c.query('INSERT INTO buyer_quotas (shop_id, rule_id, buyer_id, active_quantity) VALUES (?,?,?,?) ' +
+      'ON DUPLICATE KEY UPDATE active_quantity = active_quantity + ?', [req.shop, rule, req.buyer, qty, qty]);
+    const [[q]] = await c.query('SELECT active_quantity + claimed_quantity t FROM buyer_quotas WHERE shop_id=? AND rule_id=? AND buyer_id=?',
+      [req.shop, rule, req.buyer]);
+    if (Number(q.t) > lim) throw new BizError('BUYER_LIMIT_EXCEEDED', { rule });
+    await c.query('INSERT INTO reservation_quota_usages (shop_id, reservation_id, rule_id, quantity) VALUES (?,?,?,?)', [req.shop, rid, rule, qty]);
   }
   for (let i = 0; i < req.lines.length; i++) {
     const l = req.lines[i];
     const ids = picked[i];
     const [d] = await c.query(
-      `DELETE FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND location_id=? AND unit_id IN (${ids.map(() => '?').join(',')})`,
-      [req.shop, l.item, l.loc, ...ids]);
+      `DELETE FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=? AND unit_id IN (${ids.map(() => '?').join(',')})`,
+      [req.shop, l.item, l.part, ...ids]);
     if (d.affectedRows !== l.qty) throw new InvariantViolation('reserve delete count');
   }
-  await c.query('INSERT INTO reserved_quantities (shop_id, reservation_id, line_no, inventory_item_id, location_id, quantity) VALUES ' +
-    req.lines.map(() => '(?,?,?,?,?,?)').join(','), req.lines.flatMap((l, i) => [req.shop, rid, i + 1, l.item, l.loc, l.qty]));
+  await c.query('INSERT INTO reserved_quantities (shop_id, reservation_id, line_no, inventory_item_id, stock_partition_id, quantity) VALUES ' +
+    req.lines.map(() => '(?,?,?,?,?,?)').join(','), req.lines.flatMap((l, i) => [req.shop, rid, i + 1, l.item, l.part, l.qty]));
   return rid;
 }
 
@@ -207,7 +231,7 @@ class Facade {
     // sold-out fast path (秒杀扩展): reject without touching the DB while a recent INSUFFICIENT verdict is fresh
     if (this.opts.soldOutTtlMs > 0) {
       for (const l of req.lines) {
-        const s = this.soldOut.get(keyStr({ shop: req.shop, item: l.item, loc: l.loc }));
+        const s = this.soldOut.get(keyStr({ shop: req.shop, item: l.item, part: l.part }));
         if (s && s.until > Date.now() && l.qty > s.potential) { this.stats.soldOutFastReject++; throw new BizError('INSUFFICIENT_STOCK', { fast: true }); }
       }
     }
@@ -232,6 +256,7 @@ class Facade {
             throw new BizError('INSUFFICIENT_STOCK');
           }
           if (r.outcome === 'FROZEN') throw new BizError('INVENTORY_FROZEN');
+          if (r.outcome === 'CLOSED') throw new BizError('STOCK_PARTITION_CLOSED');
           const refilledAfter = (this.lastRefillAt.get(keyStr(e.key)) || 0) >= startedAt;
           this.stats.retries++;
           if ((r.outcome === 'REFILLED' || refilledAfter) && immediate < this.opts.immediate) { immediate++; continue; }
@@ -261,26 +286,22 @@ async function lockHeader(c, shop, rid) {
   return h;
 }
 async function linesOf(c, shop, rid) {
-  const [rows] = await c.query('SELECT inventory_item_id item, location_id loc, quantity qty FROM reserved_quantities WHERE shop_id=? AND reservation_id=? ORDER BY inventory_item_id, location_id', [shop, rid]);
-  return rows.map((r) => ({ shop, item: Number(r.item), loc: Number(r.loc), qty: Number(r.qty) }));
+  const [rows] = await c.query('SELECT inventory_item_id item, stock_partition_id part, quantity qty FROM reserved_quantities WHERE shop_id=? AND reservation_id=? ORDER BY inventory_item_id, stock_partition_id', [shop, rid]);
+  return rows.map((r) => ({ shop, item: Number(r.item), part: Number(r.part), qty: Number(r.qty) }));
 }
-async function quotaMove(c, shop, buyer, lines, activeDelta, claimedDelta) {
-  if (!buyer) return;
-  for (const [item, qty] of qtyByItem(lines)) {
+// Move buyer quota exactly along the usages recorded at reserve time (never recompute from current rules).
+async function quotaMove(c, shop, rid, buyer, activeSign, claimedSign) {
+  for (const { rule, qty } of await usagesOf(c, shop, rid)) {
     const [u] = await c.query(
-      'UPDATE buyer_quotas SET active_quantity = active_quantity + ?, claimed_quantity = claimed_quantity + ? WHERE shop_id=? AND inventory_item_id=? AND buyer_id=? AND active_quantity + ? >= 0',
-      [activeDelta * qty, claimedDelta * qty, shop, item, buyer, activeDelta * qty]);
-    if (u.affectedRows !== 1) {
-      // items without a purchase limit have no quota row: that is fine only if no limit exists
-      const lim = await limitsFor(c, shop, [item]);
-      if (lim.has(item)) throw new InvariantViolation('buyer quota ' + buyer + ' item ' + item);
-    }
+      'UPDATE buyer_quotas SET active_quantity = active_quantity + ?, claimed_quantity = claimed_quantity + ? WHERE shop_id=? AND rule_id=? AND buyer_id=? AND active_quantity + ? >= 0',
+      [activeSign * qty, claimedSign * qty, shop, rule, buyer, activeSign * qty]);
+    if (u.affectedRows !== 1) throw new InvariantViolation(`buyer quota rule ${rule} buyer ${buyer}`);
   }
 }
 async function modes(c, lines) {
   const out = [];
   for (const l of lines) {
-    const [[m]] = await c.query('SELECT settlement_mode mode FROM inventory_ledger WHERE shop_id=? AND inventory_item_id=? AND location_id=?', [l.shop, l.item, l.loc]);
+    const [[m]] = await c.query('SELECT settlement_mode mode FROM inventory_ledger WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=?', [l.shop, l.item, l.part]);
     out.push({ ...l, mode: m.mode });
   }
   return out;
@@ -290,15 +311,15 @@ async function applyLedgerOrPending(c, rid, lines, type) {
   for (const l of ls.filter((x) => x.mode === 'SYNC')) {
     await lockLedger(c, l);
     const sql = type === 'CLAIM'
-      ? 'UPDATE inventory_ledger SET on_hand_quantity=on_hand_quantity-?, allocated_quantity=allocated_quantity-? WHERE shop_id=? AND inventory_item_id=? AND location_id=? AND on_hand_quantity>=? AND allocated_quantity>=?'
-      : 'UPDATE inventory_ledger SET allocated_quantity=allocated_quantity-? WHERE shop_id=? AND inventory_item_id=? AND location_id=? AND allocated_quantity>=?';
-    const params = type === 'CLAIM' ? [l.qty, l.qty, l.shop, l.item, l.loc, l.qty, l.qty] : [l.qty, l.shop, l.item, l.loc, l.qty];
+      ? 'UPDATE inventory_ledger SET on_hand_quantity=on_hand_quantity-?, allocated_quantity=allocated_quantity-? WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=? AND on_hand_quantity>=? AND allocated_quantity>=?'
+      : 'UPDATE inventory_ledger SET allocated_quantity=allocated_quantity-? WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=? AND allocated_quantity>=?';
+    const params = type === 'CLAIM' ? [l.qty, l.qty, l.shop, l.item, l.part, l.qty, l.qty] : [l.qty, l.shop, l.item, l.part, l.qty];
     const [u] = await c.query(sql, params);
     if (u.affectedRows !== 1) throw new InvariantViolation(type + ' ledger ' + keyStr(l));
   }
   for (const l of ls.filter((x) => x.mode === 'BATCHED')) {
-    await c.query('INSERT INTO ledger_pending_entries (shop_id, inventory_item_id, location_id, reservation_id, entry_type, on_hand_delta, allocated_delta) VALUES (?,?,?,?,?,?,?)',
-      [l.shop, l.item, l.loc, rid, type, type === 'CLAIM' ? -l.qty : 0, -l.qty]);
+    await c.query('INSERT INTO ledger_pending_entries (shop_id, inventory_item_id, stock_partition_id, reservation_id, entry_type, on_hand_delta, allocated_delta) VALUES (?,?,?,?,?,?,?)',
+      [l.shop, l.item, l.part, rid, type, type === 'CLAIM' ? -l.qty : 0, -l.qty]);
   }
 }
 
@@ -309,7 +330,7 @@ async function claimTx(c, shop, rid, pref, lateClaim = false) {
   if (h.status === 'EXPIRED') { if (!lateClaim) throw new BizError('RESERVATION_EXPIRED'); return lateClaimExpired(c, shop, rid, pref, h); }
   if (!h.beforeDeadline && !lateClaim) throw new BizError('RESERVATION_EXPIRED');
   const lines = await linesOf(c, shop, rid);
-  await quotaMove(c, shop, h.buyer, lines, -1, +1);
+  await quotaMove(c, shop, rid, h.buyer, -1, +1);
   await applyLedgerOrPending(c, rid, lines, 'CLAIM');
   await c.query("UPDATE reservations SET status='CLAIMED', claim_mode=?, payment_reference=?, claimed_at=UTC_TIMESTAMP(6) WHERE shop_id=? AND reservation_id=?",
     [h.beforeDeadline ? 'RESERVED' : 'LATE', pref, shop, rid]);
@@ -321,7 +342,7 @@ async function releaseTx(c, shop, rid, kind) {
   if (h.status !== 'ACTIVE') return 'NOOP_' + h.status;
   if (kind === 'EXPIRED' && h.beforeDeadline) return 'NOT_DUE';
   const lines = await linesOf(c, shop, rid);
-  await quotaMove(c, shop, h.buyer, lines, -1, 0);
+  await quotaMove(c, shop, rid, h.buyer, -1, 0);
   await applyLedgerOrPending(c, rid, lines, 'RELEASE');
   const col = kind === 'EXPIRED' ? 'expired_at' : 'cancelled_at';
   await c.query(`UPDATE reservations SET status=?, ${col}=UTC_TIMESTAMP(6) WHERE shop_id=? AND reservation_id=?`, [kind, shop, rid]);
@@ -331,15 +352,13 @@ async function releaseTx(c, shop, rid, kind) {
 // §7.6.2: EXPIRED -> CLAIMED(LATE), re-acquire allocation (F first, then pool)
 async function lateClaimExpired(c, shop, rid, pref, h) {
   const lines = await linesOf(c, shop, rid);
-  if (h.buyer) {
-    const per = qtyByItem(lines);
-    const limits = await limitsFor(c, shop, per.map((x) => x[0]));
-    for (const [item, qty] of per) {
-      if (!limits.has(item)) continue;
-      await c.query('UPDATE buyer_quotas SET claimed_quantity = claimed_quantity + ? WHERE shop_id=? AND inventory_item_id=? AND buyer_id=?', [qty, shop, item, h.buyer]);
-      const [[q]] = await c.query('SELECT active_quantity + claimed_quantity t FROM buyer_quotas WHERE shop_id=? AND inventory_item_id=? AND buyer_id=?', [shop, item, h.buyer]);
-      if (Number(q.t) > limits.get(item)) throw new BizError('BUYER_LIMIT_EXCEEDED');
-    }
+  // re-take the quota recorded at reserve time; re-check only rules that are still ACTIVE
+  for (const { rule, qty } of await usagesOf(c, shop, rid)) {
+    await c.query('UPDATE buyer_quotas SET claimed_quantity = claimed_quantity + ? WHERE shop_id=? AND rule_id=? AND buyer_id=?', [qty, shop, rule, h.buyer]);
+    const [[q]] = await c.query(
+      `SELECT b.active_quantity + b.claimed_quantity t, r.per_buyer_limit lim, r.status FROM buyer_quotas b JOIN purchase_limit_rules r ON r.rule_id=b.rule_id
+        WHERE b.shop_id=? AND b.rule_id=? AND b.buyer_id=?`, [shop, rule, h.buyer]);
+    if (q.status === 'ACTIVE' && Number(q.t) > Number(q.lim)) throw new BizError('BUYER_LIMIT_EXCEEDED', { rule });
   }
   // lock order: all ledger rows (sorted) first, then units (§7.1)
   const ledgers = [];
@@ -355,20 +374,20 @@ async function lateClaimExpired(c, shop, rid, pref, h) {
     const fromPool = l.qty - fromFree;
     if (fromPool > 0) {
       const [rows] = await c.query(
-        'SELECT unit_id FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND location_id=? ORDER BY unit_id LIMIT ? FOR UPDATE SKIP LOCKED',
-        [l.shop, l.item, l.loc, fromPool]);
+        'SELECT unit_id FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=? ORDER BY unit_id LIMIT ? FOR UPDATE SKIP LOCKED',
+        [l.shop, l.item, l.part, fromPool]);
       if (rows.length < fromPool) {
-        const [[{ p }]] = await c.query('SELECT COUNT(*) p FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND location_id=?', [l.shop, l.item, l.loc]);
+        const [[{ p }]] = await c.query('SELECT COUNT(*) p FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=?', [l.shop, l.item, l.part]);
         if (fromFree + Number(p) < l.qty) throw new BizError('LATE_CLAIM_INSUFFICIENT_STOCK');
         throw new BizError('INVENTORY_BUSY');
       }
       const ids = rows.map((r) => r.unit_id);
-      const [d] = await c.query(`DELETE FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND location_id=? AND unit_id IN (${ids.map(() => '?').join(',')})`,
-        [l.shop, l.item, l.loc, ...ids]);
+      const [d] = await c.query(`DELETE FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=? AND unit_id IN (${ids.map(() => '?').join(',')})`,
+        [l.shop, l.item, l.part, ...ids]);
       if (d.affectedRows !== fromPool) throw new InvariantViolation('late claim delete');
     }
-    const [u] = await c.query('UPDATE inventory_ledger SET on_hand_quantity=on_hand_quantity-?, allocated_quantity=allocated_quantity-? WHERE shop_id=? AND inventory_item_id=? AND location_id=?',
-      [l.qty, fromPool, l.shop, l.item, l.loc]);
+    const [u] = await c.query('UPDATE inventory_ledger SET on_hand_quantity=on_hand_quantity-?, allocated_quantity=allocated_quantity-? WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=?',
+      [l.qty, fromPool, l.shop, l.item, l.part]);
     if (u.affectedRows !== 1) throw new InvariantViolation('late claim ledger');
   }
   await c.query("UPDATE reservations SET status='CLAIMED', claim_mode='LATE', payment_reference=?, claimed_at=UTC_TIMESTAMP(6) WHERE shop_id=? AND reservation_id=?", [pref, shop, rid]);
@@ -378,26 +397,186 @@ async function lateClaimExpired(c, shop, rid, pref, h) {
 // Settler job for one key (BATCHED)
 async function settleTx(c, k) { await lockLedger(c, k); return settleInline(c, k); }
 
+// ---------------- logical stock partitions (§7.14) ----------------
+const opHash = (o) => crypto.createHash('sha256').update(JSON.stringify(o)).digest();
+
+async function createPartitionTx(c, shop, part, externalRef = null) {
+  await c.query('INSERT INTO stock_partitions (shop_id, stock_partition_id, external_ref) VALUES (?,?,?)', [shop, part, externalRef]);
+}
+async function initializeTx(c, { shop, item, part, qty, opId, cap = 1000, mode = 'SYNC' }) {
+  await c.query("INSERT INTO inventory_operations (shop_id, operation_id, line_no, request_hash, operation_type, inventory_item_id, stock_partition_id, delta_quantity, on_hand_after, allocated_after, pool_capacity_after) VALUES (?,?,1,?, 'INITIALIZE', ?,?,?,?,0,?)",
+    [shop, opId, opHash({ shop, item, part, qty, cap }), item, part, qty, qty, cap]);
+  await c.query('INSERT INTO inventory_ledger (shop_id, inventory_item_id, stock_partition_id, on_hand_quantity, pool_capacity, settlement_mode) VALUES (?,?,?,?,?,?)',
+    [shop, item, part, qty, cap, mode]);
+}
+async function closePartitionTx(c, shop, part) {
+  if (part === 0) throw new BizError('INVALID_ARGUMENT');
+  const [u] = await c.query("UPDATE stock_partitions SET status='CLOSED', closed_at=UTC_TIMESTAMP(6) WHERE shop_id=? AND stock_partition_id=? AND status='OPEN'", [shop, part]);
+  return u.affectedRows === 1 ? 'CLOSED' : 'NOOP';
+}
+
+// Shared core: move `qty` of SKU `item` from partition src to dst. Caller has already inserted the operation rows.
+// Lock order: ledgers by partition ascending (same SKU) -> pending entries (settle) -> units (reclaim).
+async function moveBetweenPartitions(c, { shop, item, src, dst, qty, reclaimPool, dstCap, dstMode, qtyFromSource }) {
+  const keys = [src, dst].sort((a, b) => a - b);
+  const led = {};
+  for (const part of keys) {
+    const k = { shop, item, part };
+    if (part === dst) {
+      // create the destination ledger on first transfer; ODKU takes the row lock in sorted order
+      await c.query('INSERT INTO inventory_ledger (shop_id, inventory_item_id, stock_partition_id, on_hand_quantity, pool_capacity, settlement_mode) VALUES (?,?,?,0,?,?) ' +
+        'ON DUPLICATE KEY UPDATE shop_id = shop_id', [shop, item, part, dstCap, dstMode]);
+    }
+    let l = await lockLedger(c, k);
+    if (l.status === 'FROZEN') throw new BizError('INVENTORY_FROZEN', { part });
+    if (await settleInline(c, k)) l = await lockLedger(c, k);
+    led[part] = l;
+  }
+  const s = led[src];
+  if (qtyFromSource) qty = qtyFromSource(s);
+  if (qty <= 0) return { qty: 0, reclaimed: 0 };
+  if (s.h < qty) throw new BizError('INSUFFICIENT_STOCK', { part: src });
+  const newH = s.h - qty;
+  let reclaimed = 0;
+  if (newH < s.a) {
+    if (!reclaimPool) throw new BizError('STOCK_ALLOCATED');
+    const need = s.a - newH;
+    const [rows] = await c.query('SELECT unit_id FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=? ORDER BY unit_id LIMIT ? FOR UPDATE SKIP LOCKED',
+      [shop, item, src, need]);
+    if (rows.length < need) {
+      const [[{ p }]] = await c.query('SELECT COUNT(*) p FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=?', [shop, item, src]);
+      if (Number(p) < need) throw new BizError('STOCK_ALLOCATED'); // the gap is held by ACTIVE reservations
+      throw new BizError('INVENTORY_BUSY');                          // units locked by in-flight reserves
+    }
+    const ids = rows.map((r) => r.unit_id);
+    const [d] = await c.query(`DELETE FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=? AND unit_id IN (${ids.map(() => '?').join(',')})`,
+      [shop, item, src, ...ids]);
+    if (d.affectedRows !== need) throw new InvariantViolation('transfer reclaim delete');
+    reclaimed = need;
+  }
+  await c.query('UPDATE inventory_ledger SET on_hand_quantity=?, allocated_quantity=allocated_quantity-? WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=?',
+    [newH, reclaimed, shop, item, src]);
+  await c.query('UPDATE inventory_ledger SET on_hand_quantity=on_hand_quantity+? WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=?', [qty, shop, item, dst]);
+  return { qty, reclaimed };
+}
+async function snapshotOps(c, shop, opId, item, src, dst, reclaimed) {
+  for (const [line, part] of [[1, src], [2, dst]]) {
+    await c.query(
+      `UPDATE inventory_operations o JOIN inventory_ledger l ON l.shop_id=o.shop_id AND l.inventory_item_id=o.inventory_item_id AND l.stock_partition_id=o.stock_partition_id
+          SET o.on_hand_after=l.on_hand_quantity, o.allocated_after=l.allocated_quantity, o.pool_capacity_after=l.pool_capacity, o.pool_reclaimed_quantity=?
+        WHERE o.shop_id=? AND o.operation_id=? AND o.line_no=?`, [line === 1 ? reclaimed : 0, shop, opId, line]);
+  }
+}
+
+// Transfer: operation rows first (idempotency arbitration), then ledgers.
+async function transferTx(c, { shop, item, src, dst, qty, opId, reclaimPool = true, dstCap = 1000, dstMode = 'SYNC' }) {
+  if (src === dst || qty <= 0) throw new BizError('INVALID_ARGUMENT');
+  if ((await partitionStatus(c, shop, dst)) === 'CLOSED') throw new BizError('STOCK_PARTITION_CLOSED', { part: dst });
+  const hash = opHash({ shop, item, src, dst, qty, reclaimPool });
+  await c.query("INSERT INTO inventory_operations (shop_id, operation_id, line_no, request_hash, operation_type, inventory_item_id, stock_partition_id, delta_quantity, on_hand_after, allocated_after, pool_capacity_after) VALUES " +
+    "(?,?,1,?,'TRANSFER_OUT',?,?,?,0,0,1),(?,?,2,?,'TRANSFER_IN',?,?,?,0,0,1)",
+    [shop, opId, hash, item, src, -qty, shop, opId, hash, item, dst, qty]);
+  const r = await moveBetweenPartitions(c, { shop, item, src, dst, qty, reclaimPool, dstCap, dstMode });
+  await snapshotOps(c, shop, opId, item, src, dst, r.reclaimed);
+  return r;
+}
+
+// Return the remainder of a CLOSED partition to dst (normally partition 0) once no ACTIVE reservation is left.
+// Quantity is only known after locking, so operation rows are written after the ledger locks here.
+// A reserve that raced the close and committed after the ACTIVE count still cannot be lost: returning all of H
+// would need to reclaim more units than the pool holds, so moveBetweenPartitions fails with STOCK_ALLOCATED.
+async function returnPartition(c, { shop, item, part, dst = 0, opId }) {
+  if ((await partitionStatus(c, shop, part)) !== 'CLOSED') throw new BizError('STOCK_PARTITION_NOT_CLOSED');
+  const [[{ n }]] = await c.query(
+    `SELECT COUNT(*) n FROM reserved_quantities q JOIN reservations r ON r.shop_id=q.shop_id AND r.reservation_id=q.reservation_id
+      WHERE q.shop_id=? AND q.inventory_item_id=? AND q.stock_partition_id=? AND r.status='ACTIVE'`, [shop, item, part]);
+  const r = await moveBetweenPartitions(c, {
+    shop, item, src: part, dst, reclaimPool: true, dstCap: 1000, dstMode: 'SYNC',
+    qtyFromSource: (s) => {
+      if (Number(n) > 0) throw new BizError('ACTIVE_RESERVATIONS_REMAIN', { active: Number(n) });
+      return s.h;
+    },
+  });
+  if (r.qty === 0) return { qty: 0 };
+  const hash = opHash({ shop, item, part, dst, ret: true });
+  await c.query("INSERT INTO inventory_operations (shop_id, operation_id, line_no, request_hash, operation_type, inventory_item_id, stock_partition_id, delta_quantity, on_hand_after, allocated_after, pool_capacity_after) VALUES " +
+    "(?,?,1,?,'TRANSFER_OUT',?,?,?,0,0,1),(?,?,2,?,'TRANSFER_IN',?,?,?,0,0,1)",
+    [shop, opId, hash, item, part, -r.qty, shop, opId, hash, item, dst, r.qty]);
+  await snapshotOps(c, shop, opId, item, part, dst, r.reclaimed);
+  return r;
+}
+
 // ---------------- audit (§11) — single consistent statement ----------------
 async function audit(pool, k, initialPlusAdjust) {
   const [[r]] = await pool.query(
     `SELECT l.on_hand_quantity h, l.allocated_quantity a, l.pool_capacity cap,
-       (SELECT COUNT(*) FROM reservation_units u WHERE u.shop_id=l.shop_id AND u.inventory_item_id=l.inventory_item_id AND u.location_id=l.location_id) p,
+       (SELECT COUNT(*) FROM reservation_units u WHERE u.shop_id=l.shop_id AND u.inventory_item_id=l.inventory_item_id AND u.stock_partition_id=l.stock_partition_id) p,
        (SELECT COALESCE(SUM(q.quantity),0) FROM reserved_quantities q JOIN reservations r ON r.shop_id=q.shop_id AND r.reservation_id=q.reservation_id
-          WHERE q.shop_id=l.shop_id AND q.inventory_item_id=l.inventory_item_id AND q.location_id=l.location_id AND r.status='ACTIVE') ract,
+          WHERE q.shop_id=l.shop_id AND q.inventory_item_id=l.inventory_item_id AND q.stock_partition_id=l.stock_partition_id AND r.status='ACTIVE') ract,
        (SELECT COALESCE(SUM(q.quantity),0) FROM reserved_quantities q JOIN reservations r ON r.shop_id=q.shop_id AND r.reservation_id=q.reservation_id
-          WHERE q.shop_id=l.shop_id AND q.inventory_item_id=l.inventory_item_id AND q.location_id=l.location_id AND r.status='CLAIMED') claimed,
-       (SELECT COALESCE(SUM(e.on_hand_delta),0) FROM ledger_pending_entries e WHERE e.shop_id=l.shop_id AND e.inventory_item_id=l.inventory_item_id AND e.location_id=l.location_id) dh,
-       (SELECT COALESCE(SUM(e.allocated_delta),0) FROM ledger_pending_entries e WHERE e.shop_id=l.shop_id AND e.inventory_item_id=l.inventory_item_id AND e.location_id=l.location_id) da
-     FROM inventory_ledger l WHERE l.shop_id=? AND l.inventory_item_id=? AND l.location_id=?`, [k.shop, k.item, k.loc]);
+          WHERE q.shop_id=l.shop_id AND q.inventory_item_id=l.inventory_item_id AND q.stock_partition_id=l.stock_partition_id AND r.status='CLAIMED') claimed,
+       (SELECT COALESCE(SUM(e.on_hand_delta),0) FROM ledger_pending_entries e WHERE e.shop_id=l.shop_id AND e.inventory_item_id=l.inventory_item_id AND e.stock_partition_id=l.stock_partition_id) dh,
+       (SELECT COALESCE(SUM(e.allocated_delta),0) FROM ledger_pending_entries e WHERE e.shop_id=l.shop_id AND e.inventory_item_id=l.inventory_item_id AND e.stock_partition_id=l.stock_partition_id) da,
+       (SELECT COUNT(*) FROM inventory_operations o WHERE o.shop_id=l.shop_id AND o.inventory_item_id=l.inventory_item_id AND o.stock_partition_id=l.stock_partition_id) opcount,
+       (SELECT COALESCE(SUM(o.delta_quantity),0) FROM inventory_operations o WHERE o.shop_id=l.shop_id AND o.inventory_item_id=l.inventory_item_id AND o.stock_partition_id=l.stock_partition_id) opdelta
+     FROM inventory_ledger l WHERE l.shop_id=? AND l.inventory_item_id=? AND l.stock_partition_id=?`, [k.shop, k.item, k.part]);
   const v = Object.fromEntries(Object.entries(r).map(([a, b]) => [a, Number(b)]));
   const violations = [];
   const H = v.h + v.dh, A = v.a + v.da;
   if (!(H >= A && A >= 0)) violations.push(`H>=A>=0 fails: H=${H} A=${A}`);
   if (A !== v.p + v.ract) violations.push(`A=P+R fails: A=${A} P=${v.p} R=${v.ract}`);
   if (v.p > v.cap) violations.push(`P<=C fails: P=${v.p}`);
-  if (initialPlusAdjust !== undefined && initialPlusAdjust - v.claimed !== H) violations.push(`audit total fails: initial-claimed=${initialPlusAdjust - v.claimed} H=${H}`);
+  // per-dimension total: explicit initial (ledger seeded without operation rows) or the operation log
+  const base = initialPlusAdjust !== undefined ? initialPlusAdjust : (v.opcount > 0 ? v.opdelta : undefined);
+  if (base !== undefined && base - v.claimed !== H) violations.push(`audit total fails: ops-claimed=${base - v.claimed} H=${H}`);
   return { ...v, H, A, valid: violations.length === 0, violations };
 }
 
-module.exports = { makePool, conn, uuid, sleep, txn, classify, PoolNotReady, BizError, InvariantViolation, Facade, refillTx, reserveTx, claimTx, releaseTx, settleTx, settleInline, audit, keyStr, cmpKey };
+// SKU across all partitions: transfers cancel out, so Σ(H+dH) = initial + adjust − claimed.
+async function auditSku(pool, shop, item, initialPlusAdjust) {
+  const [[r]] = await pool.query(
+    `SELECT (SELECT COALESCE(SUM(on_hand_quantity),0) FROM inventory_ledger WHERE shop_id=? AND inventory_item_id=?) h,
+            (SELECT COALESCE(SUM(on_hand_delta),0) FROM ledger_pending_entries WHERE shop_id=? AND inventory_item_id=?) dh,
+            (SELECT COALESCE(SUM(q.quantity),0) FROM reserved_quantities q JOIN reservations r ON r.shop_id=q.shop_id AND r.reservation_id=q.reservation_id
+               WHERE q.shop_id=? AND q.inventory_item_id=? AND r.status='CLAIMED') claimed,
+            (SELECT COALESCE(SUM(delta_quantity),0) FROM inventory_operations WHERE shop_id=? AND inventory_item_id=? AND operation_type IN ('INITIALIZE','ADJUST')) base,
+            (SELECT COALESCE(SUM(delta_quantity),0) FROM inventory_operations WHERE shop_id=? AND inventory_item_id=? AND operation_type IN ('TRANSFER_OUT','TRANSFER_IN')) transfers`,
+    [shop, item, shop, item, shop, item, shop, item, shop, item]);
+  const v = Object.fromEntries(Object.entries(r).map(([a, b]) => [a, Number(b)]));
+  const total = v.h + v.dh;
+  const expected = (initialPlusAdjust !== undefined ? initialPlusAdjust : v.base) - v.claimed;
+  const violations = [];
+  if (total !== expected) violations.push(`SKU total fails: Σ(H+dH)=${total} expected=${expected}`);
+  if (v.transfers !== 0) violations.push(`transfers do not cancel out: ${v.transfers}`);
+  return { ...v, total, expected, valid: violations.length === 0, violations };
+}
+
+// buyer_quotas must equal the usages of that buyer's CLAIMED / ACTIVE reservations, per rule.
+async function quotaMismatches(pool) {
+  const [rows] = await pool.query(
+    `SELECT b.rule_id, b.buyer_id, b.active_quantity, b.claimed_quantity,
+            COALESCE(SUM(CASE WHEN r.status='ACTIVE'  THEN u.quantity END),0) exp_active,
+            COALESCE(SUM(CASE WHEN r.status='CLAIMED' THEN u.quantity END),0) exp_claimed
+       FROM buyer_quotas b
+       LEFT JOIN reservations r ON r.shop_id=b.shop_id AND r.buyer_id=b.buyer_id
+       LEFT JOIN reservation_quota_usages u ON u.shop_id=r.shop_id AND u.reservation_id=r.reservation_id AND u.rule_id=b.rule_id
+      GROUP BY b.rule_id, b.buyer_id, b.active_quantity, b.claimed_quantity
+     HAVING b.active_quantity <> exp_active OR b.claimed_quantity <> exp_claimed`);
+  return rows;
+}
+
+// Wipe all data (dedicated test database only) and recreate the default partition 0 for `shop`.
+const TABLES = ['reservation_units', 'inventory_ledger', 'reservations', 'reserved_quantities', 'ledger_pending_entries',
+  'buyer_quotas', 'purchase_limit_rules', 'reservation_quota_usages', 'inventory_operations', 'stock_partitions'];
+async function resetAll(c, shop = 1) {
+  for (const t of TABLES) await c.query(`DELETE FROM ${t}`);
+  await c.query('INSERT INTO stock_partitions (shop_id, stock_partition_id) VALUES (?, 0)', [shop]);
+}
+async function addLimitRule(c, { shop, scope, part, item, limit }) {
+  const [r] = await c.query('INSERT INTO purchase_limit_rules (shop_id, scope_type, stock_partition_id, inventory_item_id, per_buyer_limit) VALUES (?,?,?,?,?)',
+    [shop, scope, part, item, limit]);
+  return r.insertId;
+}
+
+module.exports = { makePool, conn, uuid, sleep, txn, classify, PoolNotReady, BizError, InvariantViolation, Facade, refillTx, reserveTx, claimTx, releaseTx, settleTx, settleInline, audit, auditSku, keyStr, cmpKey,
+  createPartitionTx, initializeTx, closePartitionTx, transferTx, returnPartition, resetAll, addLimitRule, quotaMismatches, TABLES };

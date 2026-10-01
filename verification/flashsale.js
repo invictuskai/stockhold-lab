@@ -11,7 +11,7 @@ const BUYERS = Number(process.env.BUYERS || 12000);
 const LIMIT = 2;
 const CONCURRENCY = Number(process.env.CONC || 64);
 const TTL = 5, GRACE = 1;
-const K = { shop: 1, item: 100, loc: 1 };
+const K = { shop: 1, item: 100, part: 0 };
 
 const tally = {};
 const inc = (k) => (tally[k] = (tally[k] || 0) + 1);
@@ -19,11 +19,10 @@ const inc = (k) => (tally[k] = (tally[k] || 0) + 1);
 (async () => {
   const reservePool = L.makePool(32), criticalPool = L.makePool(16), bgPool = L.makePool(4);
   const setup = await L.conn();
-  for (const t of ['reservation_units', 'inventory_ledger', 'reservations', 'reserved_quantities', 'ledger_pending_entries', 'buyer_quotas', 'item_purchase_limits'])
-    await setup.query(`DELETE FROM ${t}`);
-  await setup.query('INSERT INTO inventory_ledger (shop_id,inventory_item_id,location_id,on_hand_quantity,allocated_quantity,pool_capacity,settlement_mode) VALUES (?,?,?,?,0,?,?)',
-    [K.shop, K.item, K.loc, STOCK, CAP, MODE]);
-  await setup.query('INSERT INTO item_purchase_limits (shop_id,inventory_item_id,per_buyer_limit) VALUES (?,?,?)', [K.shop, K.item, LIMIT]);
+  await L.resetAll(setup, K.shop);
+  await setup.query('INSERT INTO inventory_ledger (shop_id,inventory_item_id,stock_partition_id,on_hand_quantity,allocated_quantity,pool_capacity,settlement_mode) VALUES (?,?,?,?,0,?,?)',
+    [K.shop, K.item, K.part, STOCK, CAP, MODE]);
+  await L.addLimitRule(setup, { shop: K.shop, scope: 'PARTITION_ITEM', part: K.part, item: K.item, limit: LIMIT });
   // pre-warm (秒杀前预热): fill the pool before the sale starts
   await L.txn(bgPool, (c) => L.refillTx(c, K, 1));
 
@@ -49,7 +48,7 @@ const inc = (k) => (tally[k] = (tally[k] || 0) + 1);
     while (running) {
       await L.sleep(300);
       m = m === 'SYNC' ? 'BATCHED' : 'SYNC';
-      await bgPool.query('UPDATE inventory_ledger SET settlement_mode=? WHERE shop_id=? AND inventory_item_id=? AND location_id=?', [m, K.shop, K.item, K.loc]);
+      await bgPool.query('UPDATE inventory_ledger SET settlement_mode=? WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=?', [m, K.shop, K.item, K.part]);
       inc('mode_switches');
     }
   })());
@@ -62,7 +61,7 @@ const inc = (k) => (tally[k] = (tally[k] || 0) + 1);
   })());
   loops.push((async () => {
     while (running) {
-      const [[{ p }]] = await bgPool.query('SELECT COUNT(*) p FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND location_id=?', [K.shop, K.item, K.loc]);
+      const [[{ p }]] = await bgPool.query('SELECT COUNT(*) p FROM reservation_units WHERE shop_id=? AND inventory_item_id=? AND stock_partition_id=?', [K.shop, K.item, K.part]);
       if (Number(p) < CAP / 2) { try { const r = await L.txn(bgPool, (c) => L.refillTx(c, K, 1)); inc('hotkey_refill_' + r.outcome); } catch (e) { inc('hotkey_err_' + L.classify(e)); } }
       await L.sleep(100);
     }
@@ -75,7 +74,7 @@ const inc = (k) => (tally[k] = (tally[k] || 0) + 1);
     const r = Math.random();
     const qty = r < 0.8 ? 1 : r < 0.95 ? 2 : 3;
     const idem = 'k' + i;
-    const lines = [{ item: K.item, loc: K.loc, qty }];
+    const lines = [{ item: K.item, part: K.part, qty }];
     const hash = crypto.createHash('sha256').update(JSON.stringify({ shop: K.shop, buyer, lines, ttl: TTL })).digest();
     reqs.push({ shop: K.shop, idem, hash, ttl: TTL, grace: GRACE, lines, buyer });
     if (Math.random() < 0.05) reqs.push({ ...reqs[reqs.length - 1], replayOf: idem }); // client retry with same key
@@ -143,10 +142,7 @@ const inc = (k) => (tally[k] = (tally[k] || 0) + 1);
     "SELECT COALESCE(SUM(q.quantity),0) s FROM reserved_quantities q JOIN reservations r USING (shop_id, reservation_id) WHERE r.status='CLAIMED'");
   const [over] = await setup.query(
     "SELECT r.buyer_id, SUM(q.quantity) s FROM reserved_quantities q JOIN reservations r USING (shop_id, reservation_id) WHERE r.status IN ('CLAIMED','ACTIVE') GROUP BY r.buyer_id HAVING s > ?", [LIMIT]);
-  const [quotaMismatch] = await setup.query(
-    `SELECT b.buyer_id, b.active_quantity, b.claimed_quantity, COALESCE(x.s,0) actual FROM buyer_quotas b LEFT JOIN
-       (SELECT r.buyer_id, SUM(q.quantity) s FROM reserved_quantities q JOIN reservations r USING (shop_id, reservation_id) WHERE r.status='CLAIMED' GROUP BY r.buyer_id) x
-       ON x.buyer_id=b.buyer_id WHERE b.active_quantity <> 0 OR b.claimed_quantity <> COALESCE(x.s,0)`);
+  const quotaMismatch = await L.quotaMismatches(setup);
   const [[pend]] = await setup.query('SELECT COUNT(*) n FROM ledger_pending_entries');
   const expected = /^(reserve_ok|reserve_replay|reserve_err_(INSUFFICIENT_STOCK|BUYER_LIMIT_EXCEEDED|INVENTORY_BUSY)|claim_(CLAIMED|REPLAY)|cancel_(CANCELLED|NOOP_\w+)|expiry_(EXPIRED|NOOP_\w+|NOT_DUE)|lateclaim_CLAIMED_LATE_REACQUIRED|lateclaim_CLAIMED_LATE|lateclaim_err_(LATE_CLAIM_INSUFFICIENT_STOCK|BUYER_LIMIT_EXCEEDED|INVENTORY_BUSY)|claim_err_RESERVATION_EXPIRED|hotkey_refill_\w+|settle_tx_nonempty|settled_entries|mode_switches)$/;
   const unexpected = Object.keys(tally).filter((k) => !expected.test(k));
