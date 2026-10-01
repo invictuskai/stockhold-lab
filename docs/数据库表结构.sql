@@ -11,7 +11,7 @@
 -- 本文件的数据模型是本项目的复现设计，不是 Shopify 公布的原始表结构。
 --
 -- ========================= 表间关系与业务流程 =========================
--- 库存维度：同一店铺 shop_id 下，一个商品 inventory_item_id 在一个地点 location_id。
+-- 库存维度：同一商家 shop_id 下，一个商品 inventory_item_id 在一个地点 location_id。
 -- inventory_ledger     ：该维度的库存账本，决定还有多少额度可以发放。
 -- reservation_units    ：该维度已发放、尚未被领取的库存单位池，一行代表一件。
 -- reservations         ：一次整单预留的业务头，管理幂等、过期时间和状态。
@@ -52,7 +52,7 @@
 -- 详细锁顺序与重试协议见 总体技术方案.md 第7节，不能仅按此表随意交换SQL顺序。
 
 -- ========================= 1. 库存账本 =========================
--- 一行含义：一个店铺、商品、地点的真实账面库存及已发放额度。
+-- 一行含义：一个商家、商品、地点的真实账面库存及已发放额度。
 -- 使用场景：
 --   1) 初始化和补货/减库存：维护 H；减库存后必须保证 H >= A。
 --   2) 池补充：SELECT ... FOR UPDATE 锁该行，只能从 H-A 中发放新单位。
@@ -64,8 +64,8 @@
 -- 生命周期：初始化创建，长期保留；第一版不提供删除或在线修改池容量接口。
 -- 示例：H=10000,A=1200,P=1000,R=200；还能发放8800件，可再预留总量9800件。
 CREATE TABLE inventory_ledger (
-    shop_id             BIGINT NOT NULL COMMENT '店铺ID；租户隔离维度',
-    inventory_item_id   BIGINT NOT NULL COMMENT '库存商品ID；在店铺内标识商品',
+    shop_id             BIGINT NOT NULL COMMENT '商家ID；库存、预留与幂等的隔离维度',
+    inventory_item_id   BIGINT NOT NULL COMMENT '库存商品ID；在商家内标识商品',
     location_id         BIGINT NOT NULL COMMENT '库存地点ID；不跨地点自动借库存',
     on_hand_quantity    BIGINT NOT NULL COMMENT 'H：尚未正式售出的账面库存，包含ACTIVE预留',
     allocated_quantity  BIGINT NOT NULL DEFAULT 0 COMMENT 'A：已发放额度，等于池行数P加ACTIVE预留量R',
@@ -103,7 +103,7 @@ CREATE TABLE inventory_ledger (
 -- 主键用途：查询以 shop/item/location 定位，以 unit_id 排序和锁定，避免另建维度二级索引。
 -- 示例：预留3件，删除3条单位行，但 reserved_quantities 只新增一条 quantity=3 的明细。
 CREATE TABLE reservation_units (
-    shop_id             BIGINT NOT NULL COMMENT '店铺ID；与账本维度一致',
+    shop_id             BIGINT NOT NULL COMMENT '商家ID；与账本维度一致',
     inventory_item_id   BIGINT NOT NULL COMMENT '库存商品ID；与账本维度一致',
     location_id         BIGINT NOT NULL COMMENT '库存地点ID；与账本维度一致',
     unit_id             BINARY(16) NOT NULL COMMENT '可领取单位ID；Java生成UUID，一行代表一件额度',
@@ -128,16 +128,16 @@ CREATE TABLE reservation_units (
 -- 生命周期：成功预留时创建，终态保留用于幂等与审计；第一版不自动清理。
 --           不能单独清理本表，否则会丢失明细状态及幂等依据。
 CREATE TABLE reservations (
-    shop_id             BIGINT NOT NULL COMMENT '店铺ID；预留及幂等键按店铺隔离',
+    shop_id             BIGINT NOT NULL COMMENT '商家ID；预留及幂等键按商家隔离',
     reservation_id      BINARY(16) NOT NULL COMMENT '预留ID；Java生成UUID，关联预留明细',
-    idempotency_key     VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '创建请求幂等键；同店铺唯一',
+    idempotency_key     VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '创建请求幂等键；同商家唯一',
     request_hash        BINARY(32) NOT NULL COMMENT '规范化创建请求的SHA-256；检测同键不同参数',
     status              VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'ACTIVE占用额度；CLAIMED已扣减；CANCELLED或EXPIRED已释放',
     buyer_id            VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '买家标识；限购商品必填，参与请求hash；释放/确认时据此更新buyer_quotas',
     ttl_seconds         INT NOT NULL COMMENT '请求预留有效期，5至900秒；参与请求hash',
     total_quantity      INT NOT NULL COMMENT '整单单位总量，等于所有明细quantity之和',
     line_count          INT NOT NULL COMMENT '合并重复商品和地点后的明细条数',
-    payment_reference   VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '确认扣减的支付引用；仅CLAIMED非空，同店铺唯一',
+    payment_reference   VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '确认扣减的支付引用；仅CLAIMED非空，同商家唯一',
     expires_at          DATETIME(6) NOT NULL COMMENT '对调用方承诺的保留截止时间，UTC；创建时用数据库时间计算',
     claim_deadline_at   DATETIME(6) NOT NULL COMMENT '普通claim截止及到期释放判定线=expires_at+宽限(0..120秒)；创建时持久化',
     claim_mode          VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT 'RESERVED截止前确认；LATE截止后迟到确认；仅CLAIMED非空',
@@ -188,7 +188,7 @@ CREATE TABLE reservations (
 -- 索引用途：主键读取整单；唯一键保证合并后的维度不重复；维度索引用于库存反查与审计。
 -- 示例：一单购买商品A在地点X的3件、商品B在地点Y的2件，本表保存2行，而非5行。
 CREATE TABLE reserved_quantities (
-    shop_id             BIGINT NOT NULL COMMENT '店铺ID；与预留头及库存账本一致',
+    shop_id             BIGINT NOT NULL COMMENT '商家ID；与预留头及库存账本一致',
     reservation_id      BINARY(16) NOT NULL COMMENT '所属预留ID；逻辑关联reservations',
     line_no             SMALLINT NOT NULL COMMENT '合并并按维度排序后的明细序号，从1开始',
     inventory_item_id   BIGINT NOT NULL COMMENT '本明细预留的库存商品ID',
@@ -216,8 +216,8 @@ CREATE TABLE reserved_quantities (
 -- 生命周期：成功操作后长期保留用于幂等及审计；第一版不自动归档或删除。
 -- 示例：INITIALIZE记录delta=10000；补货再记录ADJUST delta=500，不记录池补充量。
 CREATE TABLE inventory_operations (
-    shop_id             BIGINT NOT NULL COMMENT '店铺ID；管理操作幂等范围',
-    operation_id        BINARY(16) NOT NULL COMMENT '调用方生成的操作UUID；同店铺唯一，重试必须复用',
+    shop_id             BIGINT NOT NULL COMMENT '商家ID；管理操作幂等范围',
+    operation_id        BINARY(16) NOT NULL COMMENT '调用方生成的操作UUID；同商家唯一，重试必须复用',
     request_hash        BINARY(32) NOT NULL COMMENT '规范化管理请求的SHA-256；防止同操作ID更换参数',
     operation_type      VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'INITIALIZE初始化；ADJUST调整账面库存',
     inventory_item_id   BIGINT NOT NULL COMMENT '被操作的库存商品ID',
@@ -260,7 +260,7 @@ CREATE TABLE inventory_operations (
 --         未结算的释放额度暂不可再售（少卖不超卖），由下一次补充内联结算立即回收。
 -- 锁顺序：头 -> 买家额度 -> 账本 -> 分录 -> 单位（reserve 例外：先 SKIP LOCKED 领单位）；分录只由持账本锁的事务删除。
 CREATE TABLE ledger_pending_entries (
-    shop_id             BIGINT NOT NULL COMMENT '店铺ID',
+    shop_id             BIGINT NOT NULL COMMENT '商家ID',
     inventory_item_id   BIGINT NOT NULL COMMENT '库存商品ID',
     location_id         BIGINT NOT NULL COMMENT '库存地点ID',
     reservation_id      BINARY(16) NOT NULL COMMENT '产生分录的预留ID',
@@ -278,10 +278,10 @@ CREATE TABLE ledger_pending_entries (
   COMMENT='BATCHED结算模式的待合并账本分录：消除秒杀时确认与释放对单一账本行的争抢';
 
 -- ========================= 7. 商品限购配置 =========================
--- 一行含义：某店铺某商品对单个买家的最大购买量（跨地点合计）。没有行表示不限购。
+-- 一行含义：某商家某商品对单个买家的最大购买量（跨地点合计）。没有行表示不限购。
 -- 使用场景：reserve / lateClaim 在事务内普通读取；活动期间不建议修改，修改只影响之后的请求。
 CREATE TABLE item_purchase_limits (
-    shop_id             BIGINT NOT NULL COMMENT '店铺ID',
+    shop_id             BIGINT NOT NULL COMMENT '商家ID',
     inventory_item_id   BIGINT NOT NULL COMMENT '库存商品ID',
     per_buyer_limit     INT NOT NULL COMMENT '每买家最多 ACTIVE + 已确认 数量',
     created_at          DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间，UTC',
@@ -301,7 +301,7 @@ CREATE TABLE item_purchase_limits (
 --   3) lateClaim(EXPIRED)：claimed += n 并复查限购。
 -- 并发要点：每买家一行，不同买家互不竞争；同一买家并发下单在本行上串行化，正是限购需要的语义。
 CREATE TABLE buyer_quotas (
-    shop_id             BIGINT NOT NULL COMMENT '店铺ID',
+    shop_id             BIGINT NOT NULL COMMENT '商家ID',
     inventory_item_id   BIGINT NOT NULL COMMENT '限购商品ID',
     buyer_id            VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '买家标识',
     active_quantity     INT NOT NULL DEFAULT 0 COMMENT 'ACTIVE预留占用量',
