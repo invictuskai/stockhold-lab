@@ -1,0 +1,20 @@
+# 测试 profile：后台任务关闭，由测试显式驱动补充与到期；管理接口用固定测试令牌。
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: 40
+      minimum-idle: 4
+stockhold:
+  reserve:
+    max-concurrent: 256
+  refill:
+    job-enabled: false
+  expiry:
+    job-enabled: false
+  admin:
+    enabled: true
+    token: test-token
+logging:
+  level:
+    org.flywaydb: WARN
+    com.zaxxer.hikari: WARN
