@@ -1,0 +1,30 @@
+// 完整生命周期负载：70% 预留后 claim、20% 预留后 cancel、10% 等待到期释放。
+// 等待到期的那部分建议配合较短 TTL（仍需 >= 5 秒），并让过期清理有足够时间执行。
+//
+//   k6 run -e VUS=50 -e MODE=pool -e ITEM_COUNT=10 -e TTL_SECONDS=10 benchmarks/k6/lifecycle.js
+import { check } from 'k6';
+import { cancel, claim, reserve, stages } from './lib.js';
+
+export const options = {
+  stages: stages(),
+  summaryTrendStats: ['avg', 'med', 'p(95)', 'p(99)', 'max'],
+  thresholds: {
+    reserve_other_errors: ['count==0'],
+    checks: ['rate==1'],
+  },
+};
+
+export default function () {
+  const reservationId = reserve();
+  if (!reservationId) {
+    return;
+  }
+  const dice = Math.random();
+  if (dice < 0.7) {
+    // 预留已经持有额度：claim 不应因为“库存被抢光”而失败。
+    check(claim(reservationId), { 'claim succeeded': (r) => r.status === 200 });
+  } else if (dice < 0.9) {
+    check(cancel(reservationId), { 'cancel succeeded': (r) => r.status === 200 });
+  }
+  // 其余 10% 留给后台到期任务释放。
+}
