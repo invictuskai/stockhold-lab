@@ -1,0 +1,9 @@
+# 压测 profile：与 dev 叠加使用（--spring.profiles.active=dev,benchmark）。
+# 额外开放单计数器对照组和连接持有注入接口；不得用于普通 dev / production 配置。
+stockhold:
+  reserve:
+    max-concurrent: ${STOCKHOLD_RESERVE_MAX_CONCURRENT:256}
+
+logging:
+  level:
+    lab.inventory: WARN

@@ -1,0 +1,8 @@
+# 本地实验 profile：开放管理接口（仍需 X-Admin-Token，令牌来自环境变量 STOCKHOLD_ADMIN_TOKEN）。
+stockhold:
+  admin:
+    enabled: true
+
+logging:
+  level:
+    lab.inventory: INFO
