@@ -1,0 +1,29 @@
+# 本地实验用 MySQL 8.4 LTS。端口只绑定 127.0.0.1；凭据来自 .env（参见 .env.example），不提交真实值。
+services:
+  mysql:
+    image: mysql:8.4
+    command:
+      - --default-time-zone=+00:00
+      - --transaction-isolation=READ-COMMITTED
+      - --innodb-lock-wait-timeout=1
+      - --max-connections=300
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${STOCKHOLD_DB_ROOT_PASSWORD:?set STOCKHOLD_DB_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: stockhold
+      MYSQL_USER: ${STOCKHOLD_DB_USER:-stockhold}
+      MYSQL_PASSWORD: ${STOCKHOLD_DB_PASSWORD:?set STOCKHOLD_DB_PASSWORD in .env}
+      # 可选：锁形态测试使用的只读观察账号（见 scripts/mysql-init/01-test-db.sh）。
+      STOCKHOLD_TEST_OBSERVER_USER: ${STOCKHOLD_TEST_OBSERVER_USER:-stockhold_observer}
+      STOCKHOLD_TEST_OBSERVER_PASSWORD: ${STOCKHOLD_TEST_OBSERVER_PASSWORD:-}
+    ports:
+      - "127.0.0.1:${STOCKHOLD_DB_PORT:-33306}:3306"
+    volumes:
+      - ./.mysql-data/compose:/var/lib/mysql
+      - ./scripts/mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
