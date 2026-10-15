@@ -1,5 +1,6 @@
 -- StockHold Lab / MySQL 8.4 LTS
--- 设计稿：尚未执行验证。实现时迁移为 Flyway V1__create_inventory_schema.sql。
+-- 带完整注释的设计稿。实际迁移为 src/main/resources/db/migration/V1__create_inventory_schema.sql，
+-- DDL 与本文件一致，已在 MySQL 8.3.0 上由 Flyway 执行通过（8.4 LTS 尚未实际运行）。
 -- 应用、迁移和运维会话统一使用 UTC；业务写事务显式 READ COMMITTED。
 -- 无 CREATE DATABASE / DROP TABLE，避免误操作宿主数据库。
 -- 核心表刻意不设外键，原因见 总体技术方案.md。
