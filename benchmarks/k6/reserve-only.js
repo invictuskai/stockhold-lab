@@ -3,12 +3,13 @@
 //
 //   k6 run -e VUS=50 -e MODE=pool    -e ITEM_COUNT=1 benchmarks/k6/reserve-only.js
 //   k6 run -e VUS=50 -e MODE=counter -e ITEM_COUNT=1 benchmarks/k6/reserve-only.js
-import { reserve, stages } from './lib.js';
+import { OP_TRENDS, reserve, stages } from './lib.js';
 
 export const options = {
   stages: stages(),
   summaryTrendStats: ['avg', 'med', 'p(95)', 'p(99)', 'max'],
   thresholds: {
+    ...OP_TRENDS,
     // 正确性与可解释性优先，不设武断的 QPS 验收值；只要求没有未归类的错误。
     reserve_other_errors: ['count==0'],
   },

@@ -75,6 +75,14 @@ export function cancel(reservationId) {
   return http.post(`${RESERVATIONS}/${reservationId}/cancel`, null, { tags: { op: 'cancel' } });
 }
 
+// 恒为真的子指标阈值：让 k6 汇总按操作分别输出延迟分布，而不是只有混合的 http_req_duration。
+export const OP_TRENDS = {
+  'http_req_duration{op:reserve}': ['max>=0'],
+  'http_req_duration{op:claim}': ['max>=0'],
+  'http_req_duration{op:cancel}': ['max>=0'],
+  'http_reqs{op:reserve}': ['count>=0'],
+};
+
 // 预热 30 秒 + 测量 120 秒（实现与验证计划 6.4）；设备资源不足时降级并在报告中记录实际时长。
 export function stages() {
   const vus = Number(__ENV.VUS || 10);

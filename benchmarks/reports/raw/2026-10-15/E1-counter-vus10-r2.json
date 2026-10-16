@@ -1,0 +1,149 @@
+{
+  "group": "E1",
+  "title": "单热点 reserve-only：单位池 vs 单计数器",
+  "config": "counter-vus10",
+  "rep": 2,
+  "app_env": {},
+  "k6_env": {
+    "VUS": 10,
+    "ITEM_COUNT": 1,
+    "CART_DIMENSIONS": 1,
+    "QUANTITY": 1
+  },
+  "mode": "counter",
+  "script": "reserve-only.js",
+  "items": 1,
+  "capacity": 1000,
+  "seed_on_hand": 10000000,
+  "duration": "60s",
+  "wall_seconds": 61.8,
+  "k6_exit": 0,
+  "warmup_exit": 0,
+  "k6": {
+    "http_req_failed": {
+      "fails": 30466,
+      "passes": 0,
+      "value": 0
+    },
+    "http_req_duration{op:cancel}": {
+      "avg": 0,
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0
+    },
+    "reserve_created": {
+      "count": 30466,
+      "rate": 499.24911072173927
+    },
+    "reserve_other_errors": {
+      "rate": 0,
+      "count": 0
+    },
+    "http_req_duration{op:claim}": {
+      "avg": 0,
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0
+    },
+    "iterations": {
+      "count": 30466,
+      "rate": 499.24911072173927
+    },
+    "http_req_duration{op:reserve}": {
+      "avg": 19.78437980043334,
+      "med": 18.687,
+      "p(95)": 27.676249999999996,
+      "p(99)": 39.809749999999994,
+      "max": 67.85
+    },
+    "http_reqs": {
+      "count": 30466,
+      "rate": 499.24911072173927
+    },
+    "http_reqs{op:reserve}": {
+      "count": 30466,
+      "rate": 499.24911072173927
+    }
+  },
+  "app_metrics_delta": {
+    "hikaricp_connections_acquire_seconds_count{pool=\"stockhold\"}": 61109.0,
+    "hikaricp_connections_acquire_seconds_sum{pool=\"stockhold\"}": 0.042,
+    "hikaricp_connections_usage_seconds_count{pool=\"stockhold\"}": 61109.0,
+    "hikaricp_connections_usage_seconds_sum{pool=\"stockhold\"}": 595.276,
+    "stockhold_connection_acquire_seconds_count{op=\"benchmark\"}": 60991.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"benchmark\"}": 0.208008,
+    "stockhold_connection_acquire_seconds_count{op=\"expiry\"}": 59.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"expiry\"}": 0.000206,
+    "stockhold_connection_acquire_seconds_count{op=\"refill\"}": 59.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"refill\"}": 0.033452,
+    "stockhold_connection_hold_seconds_count{op=\"benchmark\"}": 60991.0,
+    "stockhold_connection_hold_seconds_sum{op=\"benchmark\"}": 595.136656,
+    "stockhold_connection_hold_seconds_count{op=\"expiry\"}": 59.0,
+    "stockhold_connection_hold_seconds_sum{op=\"expiry\"}": 0.036131,
+    "stockhold_connection_hold_seconds_count{op=\"refill\"}": 59.0,
+    "stockhold_connection_hold_seconds_sum{op=\"refill\"}": 0.042252,
+    "stockhold_sql_seconds_count{op=\"benchmark\"}": 152389.0,
+    "stockhold_sql_seconds_sum{op=\"benchmark\"}": 510.221883,
+    "stockhold_sql_seconds_count{op=\"expiry\"}": 59.0,
+    "stockhold_sql_seconds_sum{op=\"expiry\"}": 0.034345,
+    "stockhold_sql_seconds_count{op=\"refill\"}": 59.0,
+    "stockhold_sql_seconds_sum{op=\"refill\"}": 0.039151,
+    "stockhold_transaction_seconds_count{op=\"benchmark\",result=\"commit\"}": 30466.0,
+    "stockhold_transaction_seconds_sum{op=\"benchmark\",result=\"commit\"}": 578.173707
+  },
+  "mysql_delta": {
+    "Innodb_row_lock_time": 417980.0,
+    "Innodb_row_lock_waits": 30403.0,
+    "Innodb_rows_inserted": 60932.0,
+    "Innodb_rows_updated": 30466.0,
+    "Questions": 274467.0
+  },
+  "samples": {
+    "hikari_pending": {
+      "avg": 0.0,
+      "max": 0.0,
+      "samples": 20
+    },
+    "hikari_active": {
+      "avg": 9.4,
+      "max": 10.0,
+      "samples": 20
+    },
+    "app_process_cpu": {
+      "avg": 0.031,
+      "max": 0.033,
+      "samples": 20
+    },
+    "host_system_cpu": {
+      "avg": 0.468,
+      "max": 0.51,
+      "samples": 20
+    },
+    "threads_running": {
+      "avg": 9.7,
+      "max": 12.0,
+      "samples": 20
+    },
+    "mysql_container_cpu_percent": {
+      "avg": 76.671,
+      "max": 79.16,
+      "samples": 20
+    }
+  },
+  "audit": {
+    "valid": true,
+    "dimensions": [
+      {
+        "item": 2001,
+        "valid": true,
+        "H": 10000000,
+        "R": 35922,
+        "activeDetail": 35922,
+        "claimedDetail": 0
+      }
+    ]
+  },
+  "k6_log_tail": ""
+}

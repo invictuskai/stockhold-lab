@@ -7,7 +7,7 @@
 // 预期：connection 模式下 stockhold.connection.hold{op=benchmark} 与 hikaricp.connections.pending 上升，
 // reserve 的连接获取等待变长但其 SQL 时间不变；outside 模式不占用连接。
 import http from 'k6/http';
-import { BASE_URL, reserve } from './lib.js';
+import { BASE_URL, OP_TRENDS, reserve } from './lib.js';
 
 const DURATION = __ENV.DURATION || '120s';
 
@@ -17,6 +17,7 @@ export const options = {
     hold: { executor: 'constant-vus', vus: Number(__ENV.HOLD_VUS || 8), duration: DURATION, exec: 'holdLoad' },
   },
   summaryTrendStats: ['avg', 'med', 'p(95)', 'p(99)', 'max'],
+  thresholds: { ...OP_TRENDS },
 };
 
 export function reserveLoad() {
