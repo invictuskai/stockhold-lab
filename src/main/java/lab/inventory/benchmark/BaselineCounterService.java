@@ -94,10 +94,7 @@ public class BaselineCounterService {
         }
         CanonicalReservationRequest request = CanonicalReservationRequest.of(shopId, ttlSeconds, rawLines);
         try (BusinessOperationContext.Scope ignored = BusinessOperationContext.open(BusinessOperation.BENCHMARK)) {
-            Optional<ReserveOutcome> replay = findReplay(idempotencyKey, request);
-            if (replay.isPresent()) {
-                return replay.get();
-            }
+            // 与单位池方案一致：不做事务外的幂等预查，重放由插入头时的唯一约束仲裁。
             UUID reservationId = UUID.randomUUID();
             try {
                 return new ReserveOutcome(transactions.executeWithRetry(BusinessOperation.BENCHMARK,

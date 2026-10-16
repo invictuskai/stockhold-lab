@@ -60,6 +60,21 @@ class JobsAndObservabilityTest extends IntegrationTestBase {
         assertThat(meters.find("hikaricp.connections.active").gauge()).isNotNull();
     }
 
+    /**
+     * 文章的连接教训：热路径上的一次预留只借一次连接，即预留事务本身。
+     * 幂等预查与容量校验不再各自借连接；压测中它们曾占全部借出次数的三分之二。
+     */
+    @Test
+    void steadyStateReserveBorrowsExactlyOneConnection() {
+        InventoryKey key = createInventory(newShop(), ITEM_A, LOCATION_X, 100, 1000);
+        reserve(key, 1); // 首次：填充容量缓存，并同步补充空池
+
+        long holdsBefore = count("stockhold.connection.hold", "reserve");
+        reserve(key, 1);
+
+        assertThat(count("stockhold.connection.hold", "reserve")).isEqualTo(holdsBefore + 1);
+    }
+
     private long count(String name, String operation) {
         return meters.find(name).tag("op", operation).timers().stream().mapToLong(Timer::count).sum();
     }

@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
@@ -33,6 +34,7 @@ import org.springframework.stereotype.Service;
 public class ReservationFacade {
 
     private static final Pattern TOKEN = Pattern.compile("[A-Za-z0-9._:-]{1,128}");
+    private static final int CAPACITY_CACHE_LIMIT = 100_000;
 
     public record ReserveOutcome(Reservation reservation, boolean replayed) {
     }
@@ -45,6 +47,7 @@ public class ReservationFacade {
     private final InventoryMetrics metrics;
     private final StockholdProperties.Reserve config;
     private final Semaphore admission;
+    private final Map<InventoryKey, Integer> capacityCache = new ConcurrentHashMap<>();
 
     public ReservationFacade(ReservationTransactionService transactions, PoolRefillService refills,
             ReservationRepository reservations, InventoryLedgerRepository ledgers, TransactionRunner runner,
@@ -97,11 +100,19 @@ public class ReservationFacade {
     }
 
     private ReserveOutcome reserveWithRetry(String idempotencyKey, CanonicalReservationRequest request) {
-        Optional<ReserveOutcome> replay = findReplay(idempotencyKey, request);
-        if (replay.isPresent()) {
-            return replay.get();
+        // 不做事务外的幂等预查：预留事务的第一条语句就是插入头，重放由唯一约束仲裁后再查询已有记录。
+        // 首次请求因此少借一次连接；重放只多一次立即失败的插入。
+        Optional<ReserveOutcome> replay;
+        try {
+            checkCapacities(request);
+        } catch (ApiException e) {
+            // 失败路径保持原有优先级：已用过的幂等键先按重放 / 冲突处理，再报参数或库存错误。
+            replay = findReplay(idempotencyKey, request);
+            if (replay.isPresent()) {
+                return replay.get();
+            }
+            throw e;
         }
-        checkCapacities(request);
 
         UUID reservationId = UUID.randomUUID();
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(config.budgetMillis());
@@ -169,12 +180,21 @@ public class ReservationFacade {
         });
     }
 
-    /** 单维度数量不得超过池容量；容量创建后固定，因此在事务前用非锁定读校验。 */
+    /**
+     * 单维度数量不得超过池容量。容量创建后不可修改，因此只缓存已存在维度的容量：
+     * 热点维度的预留不再为这次校验单独借一次连接。不存在的维度不缓存，每次都查库。
+     */
     private void checkCapacities(CanonicalReservationRequest request) {
-        List<InventoryKey> keys = request.lines().stream().map(CanonicalReservationRequest.Line::key).toList();
-        Map<InventoryKey, Integer> capacities = ledgers.findCapacities(request.shopId(), keys);
+        List<InventoryKey> missing = request.lines().stream().map(CanonicalReservationRequest.Line::key)
+                .filter(key -> !capacityCache.containsKey(key)).toList();
+        if (!missing.isEmpty()) {
+            if (capacityCache.size() > CAPACITY_CACHE_LIMIT) {
+                capacityCache.clear();
+            }
+            capacityCache.putAll(ledgers.findCapacities(request.shopId(), missing));
+        }
         for (CanonicalReservationRequest.Line line : request.lines()) {
-            Integer capacity = capacities.get(line.key());
+            Integer capacity = capacityCache.get(line.key());
             if (capacity == null) {
                 throw ApiException.inventoryNotFound(line.key());
             }

@@ -49,6 +49,24 @@ class IdempotencyAndStateIntegrationTest extends IntegrationTestBase {
         assertQuantities(key, 100, 100, 97, 3);
     }
 
+    /** 没有事务外的幂等预查后，已用过的键配上本身非法的请求仍先报幂等冲突，而不是参数或库存错误。 */
+    @Test
+    void reusedKeyReportsConflictBeforeCapacityOrMissingInventoryErrors() {
+        InventoryKey key = createInventory(newShop(), ITEM_A, LOCATION_X, 100, 10);
+        String idempotencyKey = newKey("checkout");
+        reservations.reserve(key.shopId(), idempotencyKey, null, List.of(line(key, 3)));
+        InventoryKey missing = new InventoryKey(key.shopId(), ITEM_B, LOCATION_Y);
+
+        assertThat(errorCodeOf(() -> reservations.reserve(key.shopId(), idempotencyKey, null,
+                List.of(line(key, 11))))).isEqualTo(ErrorCode.IDEMPOTENCY_CONFLICT);
+        assertThat(errorCodeOf(() -> reservations.reserve(key.shopId(), idempotencyKey, null,
+                List.of(line(missing, 1))))).isEqualTo(ErrorCode.IDEMPOTENCY_CONFLICT);
+        // 新的键上同样的请求才报对应的错误。
+        assertThat(errorCodeOf(() -> reservations.reserve(key.shopId(), newKey("fresh"), null,
+                List.of(line(key, 11))))).isEqualTo(ErrorCode.QUANTITY_LIMIT_EXCEEDED);
+        assertQuantities(key, 100, 10, 7, 3);
+    }
+
     @Test
     void replayReturnsCurrentTerminalStateAndExpiredActiveDoesNotCreateNewHold() {
         InventoryKey key = createInventory(newShop(), ITEM_A, LOCATION_X, 100, 1000);
