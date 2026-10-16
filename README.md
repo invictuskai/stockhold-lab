@@ -14,7 +14,7 @@
 
 - **正确性**：并发预留不超卖，确认、取消与超时释放不重复变更库存。
 - **原子性**：一个订单涉及多个商品 / 地点时，在同一个 MySQL 事务中全成功或全失败。
-- **性能边界**：比较库存单位池与单行计数器方案，观察吞吐、延迟、锁等待和连接持有时间，而非预设性能结论。
+- **性能边界**：比较库存单位池与单行计数器方案，观察吞吐、延迟、锁等待和连接持有时间，而非预设性能结论。单机结果：单热点预留吞吐约为单计数器的 2.4 倍，完整生命周期下只领先约 10%，详见[压测报告](benchmarks/reports/2026-10-15-unit-pool-vs-counter.md)。
 
 ## 核心设计
 
@@ -107,7 +107,7 @@ export STOCKHOLD_TEST_DB_USER=$STOCKHOLD_DB_USER STOCKHOLD_TEST_DB_PASSWORD=$STO
 
 ### 压测
 
-k6 脚本在 [benchmarks/k6](benchmarks/k6)，对照组需要 `dev,benchmark` profile，详见[对照组说明](benchmarks/baseline-counter/README.md)。多维度预留的 UNION ALL 锁定读由 `STOCKHOLD_UNION_ALL_SELECT=true` 打开，默认关闭。
+k6 脚本在 [benchmarks/k6](benchmarks/k6)，对照组需要 `dev,benchmark` profile，详见[对照组说明](benchmarks/baseline-counter/README.md)。整套实验可用 `python3 benchmarks/run_matrix.py --out <目录>` 复现（自动启停应用、清库、播种、预热、测量与审计）。多维度预留的 UNION ALL 锁定读由 `STOCKHOLD_UNION_ALL_SELECT=true` 打开，默认关闭。
 
 ## 开发路线
 
@@ -115,7 +115,7 @@ k6 脚本在 [benchmarks/k6](benchmarks/k6)，对照组需要 `dev,benchmark` pr
 - [x] M1：Spring Boot 工程、Maven Wrapper、Flyway 迁移、Compose 与数据库测试环境。
 - [x] M2：补充、预留、确认、取消及幂等闭环。
 - [x] M3：超时释放、并发争抢、补充竞态、状态竞争、故障回滚、死锁 / 锁等待处理、随机状态机测试。
-- [ ] M4：业务标签与连接获取 / 持有 / 事务 / SQL 耗时指标、单计数器对照组、UNION ALL 可选路径、k6 脚本**已实现**；**压测尚未运行，没有报告**。
+- [x] M4：业务标签与连接获取 / 持有 / 事务 / SQL 耗时指标、单计数器对照组、UNION ALL 可选路径、k6 脚本与可复现的压测执行器；单机压测报告见 [benchmarks/reports](benchmarks/reports/README.md)。
 - [ ] M5（可选）：探索 ProxySQL 归因、影子迁移与大单专用路径。
 
 尚未验证的部分：Testcontainers 路径（本机 colima 不转发发布到 0.0.0.0 的端口，未能跑通；compose 路径已验证 8.4）、多应用实例部署（多实例竞争目前由同一进程内的多线程 / 多连接模拟）、应用进程崩溃重启场景、生产规模的性能。
