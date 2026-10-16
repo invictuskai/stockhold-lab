@@ -27,3 +27,44 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+  # docker compose --profile migration up -d：旧 Redis 预留系统，供影子迁移实验（migration profile）使用。
+  redis:
+    image: redis:7.4
+    profiles: [migration]
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${STOCKHOLD_REDIS_PORT:-36379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # docker compose --profile proxysql up -d：在应用与 MySQL 之间加 ProxySQL，按 SQL 注释中的 conn_tag 归因。
+  # 配置由模板渲染，凭据来自 .env；管理端口不发布到宿主机，经由 compose 网络访问。
+  proxysql:
+    image: proxysql/proxysql:2.7.3
+    profiles: [proxysql]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      STOCKHOLD_DB_USER: ${STOCKHOLD_DB_USER:-stockhold}
+      STOCKHOLD_DB_PASSWORD: ${STOCKHOLD_DB_PASSWORD:?set STOCKHOLD_DB_PASSWORD in .env}
+      STOCKHOLD_PROXYSQL_ADMIN_PASSWORD: ${STOCKHOLD_PROXYSQL_ADMIN_PASSWORD:-${STOCKHOLD_DB_PASSWORD}}
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        sed -e "s|__DB_USER__|$$STOCKHOLD_DB_USER|g"
+        -e "s|__DB_PASSWORD__|$$STOCKHOLD_DB_PASSWORD|g"
+        -e "s|__ADMIN_PASSWORD__|$$STOCKHOLD_PROXYSQL_ADMIN_PASSWORD|g"
+        /etc/stockhold/proxysql.cnf.template > /tmp/proxysql.cnf
+        && exec proxysql -f --initial -c /tmp/proxysql.cnf
+    ulimits:
+      nofile: {soft: 65535, hard: 65535}
+    volumes:
+      - ./scripts/proxysql:/etc/stockhold:ro
+    ports:
+      - "127.0.0.1:${STOCKHOLD_PROXYSQL_PORT:-36033}:6033"

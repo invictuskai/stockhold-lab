@@ -25,6 +25,12 @@ spring:
   servlet:
     multipart:
       enabled: false
+  data:
+    redis:
+      # 仅 migration profile 使用（compose 的 migration profile 启动 Redis，只绑定 127.0.0.1）。
+      host: ${STOCKHOLD_REDIS_HOST:127.0.0.1}
+      port: ${STOCKHOLD_REDIS_PORT:36379}
+      timeout: 2s
 
 server:
   # 默认只监听本地。
@@ -37,6 +43,10 @@ server:
       max: ${STOCKHOLD_HTTP_THREADS:200}
 
 management:
+  health:
+    redis:
+      # 未启用 migration profile 时不依赖 Redis，健康检查不应因它变为 DOWN。
+      enabled: false
   endpoints:
     web:
       exposure:

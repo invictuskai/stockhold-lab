@@ -1,0 +1,14 @@
+# Redis -> MySQL 影子迁移实验（总体技术方案“与文章的一致点”中的影子双写）。
+# 与 dev 叠加使用：--spring.profiles.active=dev,migration。需要 compose 的 migration profile 启动 Redis。
+management:
+  health:
+    redis:
+      enabled: true
+
+stockhold:
+  migration:
+    # 旧 Redis 系统的到期清理间隔与每批数量。
+    sweep-interval-millis: 1000
+    sweep-batch-size: 200
+    # 保留最近多少条影子不一致样本，供 /api/v1/migration/mismatches 查看。
+    mismatch-sample-size: 500
