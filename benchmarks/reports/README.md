@@ -3,8 +3,9 @@
 | 报告 | 内容 |
 | --- | --- |
 | [2026-10-15 单位池 vs 单计数器](2026-10-15-unit-pool-vs-counter.md) | 单机（M1 Max + colima MySQL 8.4）上的 E1–E6：热点预留、完整生命周期、UNION ALL、连接持有注入、池容量、连接优化前后 |
+| [2026-10-16 扩展性与故障演练](2026-10-16-scaling-and-drills.md) | E7–E11：Hikari 连接数扫描、多应用实例、进程崩溃重启、ProxySQL 连接归因、Redis → MySQL 影子迁移 |
 
-原始数据在 [raw/](raw)，用 [`benchmarks/run_matrix.py`](../run_matrix.py) 生成、[`benchmarks/summarize.py`](../summarize.py) 汇总。所有结果都是单机相对比较，不是生产容量结论。
+原始数据在 [raw/](raw)，用 [`benchmarks/run_matrix.py`](../run_matrix.py)（压测矩阵）与 [`benchmarks/drills.py`](../drills.py)（崩溃 / ProxySQL / 迁移演练）生成、[`benchmarks/summarize.py`](../summarize.py) 汇总。所有结果都是单机相对比较，不是生产容量结论。
 
 每次实验新建一个 `YYYY-MM-DD-<主题>.md`，按以下模板填写。只有 QPS 截图的报告不合格。
 
