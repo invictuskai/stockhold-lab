@@ -24,7 +24,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 JAR = ROOT / 'target' / 'stockhold-lab-0.1.0-SNAPSHOT.jar'
-BASE_URL = 'http://127.0.0.1:8080'
+BASE_PORT = 8080
+PORTS = [BASE_PORT]  # 当前组启动的应用实例端口；指标在所有实例上求和
 SHOP_ID = 1001
 FIRST_ITEM_ID = 2001
 LOCATION_ID = 3001
@@ -66,6 +67,24 @@ def experiments():
                k6=dict(VUS=50, ITEM_COUNT=1, CART_DIMENSIONS=1, QUANTITY=1))
           for capacity in (50, 1000)]
     groups.append(dict(id='E5', title='单热点池容量：50 vs 1000', app_env={}, configs=e5))
+
+    # E7：连接数扫描，检验“单位池卡在连接池上”的推测；单计数器作对照（瓶颈应在行锁，不随连接数变化）。
+    for size in (8, 16, 32, 64):
+        configs = [dict(name=f'pool-hikari{size}-vus100', script='reserve-only.js', mode='pool', items=1,
+                        capacity=1000, k6=dict(VUS=100, ITEM_COUNT=1, CART_DIMENSIONS=1, QUANTITY=1))]
+        if size in (16, 64):
+            configs.append(dict(name=f'counter-hikari{size}-vus100', script='reserve-only.js', mode='counter',
+                                items=1, capacity=1000, k6=dict(VUS=100, ITEM_COUNT=1, CART_DIMENSIONS=1, QUANTITY=1)))
+        groups.append(dict(id='E7', title='Hikari 连接数扫描：8 / 16 / 32 / 64', app_env={'STOCKHOLD_DB_POOL_SIZE': str(size)},
+                           configs=configs))
+
+    # E8：多个应用进程竞争同一个库；各实例的后台补充 / 过期任务同时运行。
+    for instances in (1, 2, 3):
+        groups.append(dict(id='E8', title='多应用实例：1 / 2 / 3 个进程（每个 16 连接）', app_env={}, instances=instances,
+                           configs=[dict(name=f'{mode}-instances{instances}-vus150', script='reserve-only.js', mode=mode,
+                                         items=1, capacity=1000,
+                                         k6=dict(VUS=150, ITEM_COUNT=1, CART_DIMENSIONS=1, QUANTITY=1))
+                                    for mode in ('pool', 'counter')]))
     return groups
 
 
@@ -98,8 +117,8 @@ def mysql(sql, database='stockhold'):
     return [line.split('\t') for line in result.stdout.splitlines() if line]
 
 
-def http(method, path, body=None, headers=None, timeout=30):
-    request = urllib.request.Request(BASE_URL + path, method=method,
+def http(method, path, body=None, headers=None, timeout=30, port=BASE_PORT):
+    request = urllib.request.Request(f'http://127.0.0.1:{port}' + path, method=method,
                                      data=None if body is None else json.dumps(body).encode(),
                                      headers={'Content-Type': 'application/json', **(headers or {})})
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -107,32 +126,52 @@ def http(method, path, body=None, headers=None, timeout=30):
 
 
 class App:
-    def __init__(self, env, overrides, log_path):
-        self.env = {**os.environ, **env, **overrides}
-        self.log_path = log_path
-        self.process = None
+    """启动 instances 个应用进程（端口 8080 起递增），全部健康后返回；退出时全部终止。"""
 
-    def __enter__(self):
-        log = open(self.log_path, 'w')
-        self.process = subprocess.Popen(['java', '-jar', str(JAR), '--spring.profiles.active=dev,benchmark'],
-                                        env=self.env, stdout=log, stderr=subprocess.STDOUT, cwd=ROOT)
+    def __init__(self, env, overrides, log_dir, name, instances=1, profiles='dev,benchmark'):
+        self.env = {**os.environ, **env, **overrides}
+        self.profiles = profiles
+        self.log_dir = log_dir
+        self.name = name
+        self.ports = [BASE_PORT + i for i in range(instances)]
+        self.processes = []
+
+    def start_one(self, port):
+        log = open(self.log_dir / f'app-{self.name}-{port}.log', 'a')
+        env = {**self.env, 'STOCKHOLD_SERVER_PORT': str(port)}
+        return subprocess.Popen(['java', '-jar', str(JAR), f'--spring.profiles.active={self.profiles}'],
+                                env=env, stdout=log, stderr=subprocess.STDOUT, cwd=ROOT)
+
+    def wait_healthy(self, port, process):
         for _ in range(120):
             try:
-                if http('GET', '/actuator/health', timeout=2)[0] == 200:
-                    return self
+                if http('GET', '/actuator/health', timeout=2, port=port)[0] == 200:
+                    return
             except OSError:
                 pass
-            if self.process.poll() is not None:
-                raise RuntimeError(f'application exited, see {self.log_path}')
+            if process.poll() is not None:
+                raise RuntimeError(f'application on port {port} exited, see {self.log_dir}')
             time.sleep(1)
-        raise RuntimeError('application did not become healthy')
+        raise RuntimeError(f'application on port {port} did not become healthy')
+
+    def __enter__(self):
+        global PORTS
+        self.processes = [self.start_one(port) for port in self.ports]
+        for port, process in zip(self.ports, self.processes):
+            self.wait_healthy(port, process)
+        PORTS = list(self.ports)
+        return self
 
     def __exit__(self, *exc):
-        self.process.terminate()
-        try:
-            self.process.wait(30)
-        except subprocess.TimeoutExpired:
-            self.process.kill()
+        global PORTS
+        for process in self.processes:
+            process.terminate()
+        for process in self.processes:
+            try:
+                process.wait(30)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        PORTS = [BASE_PORT]
 
 
 # ---------------------------------------------------------------- 数据准备与审计
@@ -193,7 +232,15 @@ KEEP = re.compile(r'^(stockhold_|hikaricp_connections_(acquire|usage|timeout))')
 
 
 def prometheus():
-    _, body = http('GET', '/actuator/prometheus')
+    values = {}
+    for port in PORTS:
+        for key, value in prometheus_one(port).items():
+            values[key] = values.get(key, 0.0) + value
+    return values
+
+
+def prometheus_one(port):
+    _, body = http('GET', '/actuator/prometheus', port=port)
     values = {}
     for line in body.splitlines():
         match = METRIC_LINE.match(line)
@@ -229,16 +276,17 @@ class Sampler(threading.Thread):
         self.container = subprocess.run(compose_cmd() + ['ps', '-q', 'mysql'], capture_output=True, text=True,
                                         cwd=ROOT).stdout.strip()
 
-    def actuator(self, name):
-        _, body = http('GET', f'/actuator/metrics/{name}', timeout=5)
+    def actuator(self, name, port=BASE_PORT):
+        _, body = http('GET', f'/actuator/metrics/{name}', timeout=5, port=port)
         return json.loads(body)['measurements'][0]['value']
 
     def run(self):
         while not self.stop.is_set():
             sample = {}
             try:
-                sample['hikari_pending'] = self.actuator('hikaricp.connections.pending')
-                sample['hikari_active'] = self.actuator('hikaricp.connections.active')
+                # 多实例时 Hikari 指标为所有实例之和。
+                sample['hikari_pending'] = sum(self.actuator('hikaricp.connections.pending', p) for p in PORTS)
+                sample['hikari_active'] = sum(self.actuator('hikaricp.connections.active', p) for p in PORTS)
                 sample['app_process_cpu'] = self.actuator('process.cpu.usage')
                 sample['host_system_cpu'] = self.actuator('system.cpu.usage')
                 sample['threads_running'] = float(mysql(
@@ -267,7 +315,8 @@ class Sampler(threading.Thread):
 
 def k6(config, env, duration, summary_path, quiet=True):
     variables = dict(config['k6'], MODE=config['mode'], SHOP_ID=SHOP_ID, FIRST_ITEM_ID=FIRST_ITEM_ID,
-                     LOCATION_ID=LOCATION_ID, WARMUP='1s', DURATION=duration, ADMIN_TOKEN=env['STOCKHOLD_ADMIN_TOKEN'])
+                     LOCATION_ID=LOCATION_ID, WARMUP='1s', DURATION=duration, ADMIN_TOKEN=env['STOCKHOLD_ADMIN_TOKEN'],
+                     BASE_URLS=','.join(f'http://127.0.0.1:{port}' for port in PORTS))
     command = ['k6', 'run', '--quiet', '--summary-export', str(summary_path)]
     for key, value in variables.items():
         command += ['-e', f'{key}={value}']
@@ -286,7 +335,8 @@ def k6_metrics(summary_path):
     return keep
 
 
-def run_once(group, config, rep, env, args, out_dir, on_hand):
+def run_once(group, config, rep, env, args, out_dir, on_hand, hooks=None):
+    """hooks 可选：start() 在测量窗口开始前调用，stop() 在结束后调用并返回附加到结果中的字典。"""
     reset_tables()
     seed(config, env, on_hand)
     initial = audit(config, env, on_hand)
@@ -299,19 +349,23 @@ def run_once(group, config, rep, env, args, out_dir, on_hand):
     prom_before, db_before = prometheus(), mysql_counters()
     sampler = Sampler()
     sampler.start()
+    if hooks:
+        hooks.start()
     started = time.time()
     code, log = k6(config, env, args.duration, scratch / 'measure.json')
     elapsed = time.time() - started
+    extra = hooks.stop() if hooks else {}
     sampler.stop.set()
     sampler.join(15)
     prom_after, db_after = prometheus(), mysql_counters()
     return dict(
         group=group['id'], title=group['title'], config=config['name'], rep=rep, app_env=group['app_env'],
+        instances=len(PORTS),
         k6_env=config['k6'], mode=config['mode'], script=config['script'], items=config['items'],
         capacity=config['capacity'], seed_on_hand=on_hand, duration=args.duration, wall_seconds=round(elapsed, 1),
         k6_exit=code, warmup_exit=warm_code, k6=k6_metrics(scratch / 'measure.json'),
         app_metrics_delta=delta(prom_after, prom_before), mysql_delta=delta(db_after, db_before),
-        samples=sampler.summary(), audit=audit(config, env, on_hand),
+        samples=sampler.summary(), audit=audit(config, env, on_hand), extra=extra,
         k6_log_tail=log if code != 0 else '')
 
 
@@ -352,7 +406,7 @@ def main():
             continue
         overrides = {k: v for k, v in group['app_env'].items()}
         (args.out / 'scratch').mkdir(exist_ok=True)
-        with App(env, overrides, args.out / 'scratch' / f"app-{group['id']}.log"):
+        with App(env, overrides, args.out / 'scratch', group['id'], group.get('instances', 1)):
             for config in group['configs']:
                 for rep in range(1, args.reps + 1):
                     target = args.out / f"{group['id']}-{config['name']}-r{rep}.json"

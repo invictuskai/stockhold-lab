@@ -1,0 +1,38 @@
+# ProxySQL 连接归因实验（compose 的 proxysql profile）。占位符由 compose 的 entrypoint 用 .env 中的凭据替换。
+datadir="/var/lib/proxysql"
+
+admin_variables=
+{
+    # radmin 供 compose 网络内的其他容器访问管理接口；管理端口不发布到宿主机。
+    admin_credentials="admin:admin;radmin:__ADMIN_PASSWORD__"
+    mysql_ifaces="0.0.0.0:6032"
+}
+
+mysql_variables=
+{
+    threads=4
+    max_connections=2048
+    interfaces="0.0.0.0:6033"
+    server_version="8.4.11"
+    # 保留 SQL 中的 /* conn_tag:... */ 注释，摘要统计才能按业务标签归因。
+    query_digests_keep_comment=true
+    monitor_enabled=false
+}
+
+mysql_servers=
+(
+    { address="mysql", port=3306, hostgroup=0, max_connections=64 }
+)
+
+mysql_users=
+(
+    { username="__DB_USER__", password="__DB_PASSWORD__", default_hostgroup=0, transaction_persistent=1 }
+)
+
+# Connector/J 建连时会执行 SELECT @@session.…；ProxySQL 默认会因此永久禁用该连接的复用，
+# 每个客户端连接都钉住一个后端连接（实测 16 个客户端连接 = 16 个后端连接，代理退化为直通）。
+# multiplex=2 表示这类查询不禁用复用。
+mysql_query_rules=
+(
+    { rule_id=1, active=1, match_pattern="@@", multiplex=2, apply=0 }
+)

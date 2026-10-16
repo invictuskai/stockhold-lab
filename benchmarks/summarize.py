@@ -135,6 +135,23 @@ def main():
                              fmt([metric(r, 'k6', 'checks', 'value') * 100 for r in items], 2, '%')])
             out.append('')
             out.append(table(['配置', 'claim P99 ms', 'cancel P99 ms', 'claim/cancel 成功率'], life))
+        if any(items[0].get('extra', {}).get('proxy_backend_seconds_per_second_by_tag') for _, items in configs):
+            proxy = []
+            for config, items in configs:
+                def backend(tag):
+                    return [r['extra']['proxy_backend_seconds_per_second_by_tag'].get(tag, 0.0) for r in items]
+
+                def app_hold(tag):
+                    return [per_second(r, app(r, f'stockhold_connection_hold_seconds_sum{{op="{tag}"}}'))
+                            for r in items]
+                proxy.append([config, fmt(app_hold('reserve'), 2), fmt(backend('reserve'), 2),
+                              fmt(app_hold('benchmark'), 2), fmt(backend('benchmark'), 2),
+                              fmt([r['extra']['proxy_backend_conn_used']['avg'] for r in items], 1),
+                              fmt([r['extra']['proxy_backend_conn_used']['max'] for r in items], 0)])
+            out.append('')
+            out.append(table(['配置', 'reserve 应用侧连接占用 s/s', 'reserve 代理后端占用 s/s',
+                              '注入调用 应用侧 s/s', '注入调用 代理后端 s/s', '后端连接使用 平均', '后端连接使用 峰值'],
+                             proxy))
         if any(items[0]['script'] == 'connection-hold.js' for _, items in configs):
             hold = []
             for config, items in configs:
