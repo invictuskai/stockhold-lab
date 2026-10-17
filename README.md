@@ -4,7 +4,7 @@
 
 受 Shopify 技术文章 [We replaced Redis with MySQL for inventory reservations—and it scaled](https://shopify.engineering/scaling-inventory-reservations) 启发，探索通过有界库存单位池、`SELECT ... FOR UPDATE SKIP LOCKED` 和 MySQL 本地事务实现库存预留。
 
-> **当前状态：M1–M3 已实现，104 个自动化测试在目标版本 MySQL 8.4.11 上全部通过（compose 与 Testcontainers 两条路径都已验证），其中包括用 `performance_schema.data_locks` 复现文章锁结论的测试；M4 的代码与脚本已就绪，压测见[压测报告](benchmarks/reports/README.md)。** 验证记录见[实现与验证计划第 8 节](docs/实现与验证计划.md#8-环境与当前验证状态)。
+> **当前状态：文章描述的机制已全部落地（逐条对照见[总体技术方案第 2 节](docs/总体技术方案.md#2-与文章的一致点及项目补充)），157 个自动化测试在目标版本 MySQL 8.4.11 上全部通过（compose 与 Testcontainers 两条路径都已验证），其中包括用 `performance_schema.data_locks` 复现文章锁结论的测试；M4 的代码与脚本已就绪，压测见[压测报告](benchmarks/reports/README.md)。** 验证记录见[实现与验证计划第 8 节](docs/实现与验证计划.md#8-环境与当前验证状态)。
 
 本项目是独立学习与验证项目，非 Shopify 官方项目，不是其内部源码或完整生产方案的复刻。
 
@@ -21,6 +21,7 @@
 | 机制 | 设计要点 |
 | --- | --- |
 | 有界库存单位池 | 每个店铺 / 商品 / 地点的可用池默认最多 1,000 行，不将全部库存一次展开 |
+| 多地点 | 一行可给出按优先级排列的候选地点，整行落在第一个能履约的地点 |
 | 并发领取 | 使用 `FOR UPDATE SKIP LOCKED` 跳过被其他事务锁定的单位行 |
 | 库存账本 | 用 `allocated_quantity` 跟踪已发放额度，避免补充时重复发放库存 |
 | 事务控制 | READ COMMITTED、复合主键、统一锁顺序、短事务 |
@@ -103,7 +104,7 @@ export STOCKHOLD_TEST_DB_USER=$STOCKHOLD_DB_USER STOCKHOLD_TEST_DB_PASSWORD=$STO
 ./mvnw test
 ```
 
-使用 colima 时，Testcontainers 需要 `DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` 与 `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock`；并在 `~/.colima/default/colima.yaml` 中设置 `docker: {ip: 127.0.0.1}`，让发布端口只绑定 IPv4 回环（默认同时绑定 `0.0.0.0` 与 `[::]` 时，本机实测 lima 的转发对 IPv4 不可达）。迁移测试（`MigrationIntegrationTest`）需要 Redis：方式 A 设置 `STOCKHOLD_TEST_REDIS_PORT`（`docker compose --profile migration up -d` 启动的 Redis 为 36379），方式 B 自动启动容器。
+使用 colima 时，Testcontainers 需要 `DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` 与 `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock`；并在 `~/.colima/default/colima.yaml` 中设置 `docker: {ip: 127.0.0.1}`，让发布端口只绑定 IPv4 回环（默认同时绑定 `0.0.0.0` 与 `[::]` 时，本机实测 lima 的转发对 IPv4 不可达）。迁移测试（`MigrationIntegrationTest`）需要 Redis：方式 A 设置 `STOCKHOLD_TEST_REDIS_PORT`（`docker compose --profile migration up -d` 启动的 Redis 为 36379），方式 B 自动启动容器。副本读测试（`ReplicaReadsTest`）在设置 `STOCKHOLD_TEST_REPLICA_JDBC_URL`（`docker compose --profile replica up -d && scripts/replica-setup.sh` 后为 `jdbc:mysql://127.0.0.1:33307/stockhold_test`）时验证真实副本，否则验证回落到主库。
 
 两者都不可用时，集成与并发测试会被**跳过**（只跑单元测试），请留意输出里的 Skipped 数量。锁形态测试（`ReserveLockShapeTest`、`ArticleLockPremiseTest`）还需要能读 `performance_schema` 的观察账号：方式 A 读取 `STOCKHOLD_TEST_OBSERVER_USER / PASSWORD`，方式 B 使用容器 root；业务账号不授予该权限。随机状态机测试失败时会打印种子，可用 `-Dstockhold.test.seed=<seed>` 复现。
 
@@ -118,9 +119,10 @@ k6 脚本在 [benchmarks/k6](benchmarks/k6)，对照组需要 `dev,benchmark` pr
 - [x] M2：补充、预留、确认、取消及幂等闭环。
 - [x] M3：超时释放、并发争抢、补充竞态、状态竞争、故障回滚、死锁 / 锁等待处理、随机状态机测试。
 - [x] M4：业务标签与连接获取 / 持有 / 事务 / SQL 耗时指标、单计数器对照组、UNION ALL 可选路径、k6 脚本与可复现的压测执行器；单机压测报告见 [benchmarks/reports](benchmarks/reports/README.md)。
-- [x] M5（可选）：ProxySQL 连接归因、Redis → MySQL 影子迁移演练、多实例与进程崩溃演练，见[扩展性与故障演练报告](benchmarks/reports/2026-10-16-scaling-and-drills.md)。大单专用路径未做。
+- [x] M5（可选）：ProxySQL 连接归因、Redis → MySQL 影子迁移演练、多实例与进程崩溃演练，见[扩展性与故障演练报告](benchmarks/reports/2026-10-16-scaling-and-drills.md)。
+- [x] M6：对照原文补齐其余机制——候选地点（只从能履约的地点预留）、跨结账批量预留、读副本、池补满即继续、旧架构两步确认的超卖 / 少卖复现、RR 死锁与锁序死锁复现、长事务耗尽 ProxySQL 后端的定位、InnoDB 线程并发度、安全的邻居、按 pod 逐步上线，见[文章完整落地报告](benchmarks/reports/2026-10-17-article-completion.md)。大单专用路径（文章未涉及）未做。
 
-尚未验证的部分：独立数据库服务器上的性能（所有压测中 MySQL 与应用、k6 同机）、生产规模的性能、大单专用路径。两种测试路径（compose 与 Testcontainers）、多应用进程、进程崩溃重启均已验证。
+尚未验证的部分：独立数据库服务器上的性能（所有压测中 MySQL 与应用、k6 同机）、生产规模的性能、大单专用路径（文章未涉及）。
 
 ## 范围与限制
 
