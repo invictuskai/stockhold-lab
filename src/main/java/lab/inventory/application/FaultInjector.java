@@ -18,7 +18,9 @@ public class FaultInjector {
         RELEASE_AFTER_LEDGER_UPDATE,
         REFILL_AFTER_COUNT,
         REFILL_AFTER_ALLOCATED_UPDATE,
-        REFILL_AFTER_FIRST_BATCH
+        REFILL_AFTER_FIRST_BATCH,
+        /** 迁移实验：旧系统确认的两步（Redis 与 MySQL 账本）之间。 */
+        LEGACY_CLAIM_BETWEEN_SYSTEMS
     }
 
     private static final Consumer<Point> NONE = point -> {

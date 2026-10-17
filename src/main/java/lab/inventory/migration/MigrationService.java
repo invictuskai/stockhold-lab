@@ -224,6 +224,11 @@ public class MigrationService {
         return new Consistency(shopId, consistent, dimensions, redisCounts, mysqlCounts);
     }
 
+    /** 旧系统内部的账实差异（Redis 可售 + 已预留 − 旧账本账面），见 {@link LegacyRedisReservations#claim}。 */
+    public List<LegacyRedisReservations.LegacyDrift> legacyDrift(List<InventoryKey> keys) {
+        return keys.stream().map(redis::drift).toList();
+    }
+
     private static void requireToken(String value, String name) {
         if (value == null || !TOKEN.matcher(value).matches()) {
             throw ApiException.invalidArgument(name + " must be 1..128 characters of [A-Za-z0-9._:-].");

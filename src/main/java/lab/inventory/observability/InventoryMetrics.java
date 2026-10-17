@@ -56,6 +56,11 @@ public class InventoryMetrics {
         counter("stockhold.reserve.retries", "reason", reason).increment();
     }
 
+    /** 候选地点无法履约、改用下一个候选的次数。 */
+    public void fulfillmentFallback() {
+        counter("stockhold.reserve.fulfillment.fallback").increment();
+    }
+
     /** SKIP LOCKED 缺行次数；不代表售罄。 */
     public void poolMiss() {
         counter("stockhold.reserve.pool.miss").increment();

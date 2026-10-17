@@ -9,6 +9,8 @@ import lab.inventory.api.dto.Dtos.ReservationResponse;
 import lab.inventory.api.dto.Dtos.ReserveRequest;
 import lab.inventory.application.ReservationFacade;
 import lab.inventory.application.ReservationFacade.ReserveOutcome;
+import lab.inventory.application.ReplicaReads;
+import lab.inventory.domain.Reservation;
 import lab.inventory.domain.CanonicalReservationRequest.RawLine;
 import lab.inventory.domain.exception.ApiException;
 import org.springframework.http.HttpStatus;
@@ -27,9 +29,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class ReservationController {
 
     private final ReservationFacade reservations;
+    private final ReplicaReads replicaReads;
 
-    public ReservationController(ReservationFacade reservations) {
+    public ReservationController(ReservationFacade reservations, ReplicaReads replicaReads) {
         this.reservations = reservations;
+        this.replicaReads = replicaReads;
     }
 
     @PostMapping
@@ -37,7 +41,7 @@ public class ReservationController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestBody ReserveRequest request) {
         List<RawLine> lines = request.lines() == null ? null : request.lines().stream()
-                .map(l -> l == null ? null : new RawLine(l.inventoryItemId(), l.locationId(), l.quantity()))
+                .map(l -> l == null ? null : new RawLine(l.inventoryItemId(), l.locationId(), l.quantity(), l.locationIds()))
                 .toList();
         ReserveOutcome outcome = reservations.reserve(shopId, idempotencyKey, request.ttlSeconds(), lines);
         ReservationResponse body = ReservationResponse.of(outcome.reservation());
@@ -48,14 +52,21 @@ public class ReservationController {
         return ResponseEntity.status(HttpStatus.CREATED).location(location).body(body);
     }
 
+    /** consistency=eventual 时允许从只读副本读取（刚创建的预留可能暂时查不到）；默认 strong 读主库。 */
     @GetMapping("/{reservationId}")
-    public ReservationResponse get(@PathVariable long shopId, @PathVariable UUID reservationId) {
-        return ReservationResponse.of(reservations.get(shopId, reservationId));
+    public ResponseEntity<ReservationResponse> get(@PathVariable long shopId, @PathVariable UUID reservationId,
+            @RequestParam(required = false) String consistency) {
+        return respond(replicaReads.reservation(shopId, reservationId, ReplicaReads.Consistency.parse(consistency)));
     }
 
     @GetMapping("/by-idempotency-key")
-    public ReservationResponse getByIdempotencyKey(@PathVariable long shopId, @RequestParam("key") String key) {
-        return ReservationResponse.of(reservations.getByIdempotencyKey(shopId, key));
+    public ResponseEntity<ReservationResponse> getByIdempotencyKey(@PathVariable long shopId,
+            @RequestParam("key") String key, @RequestParam(required = false) String consistency) {
+        return respond(replicaReads.reservationByKey(shopId, key, ReplicaReads.Consistency.parse(consistency)));
+    }
+
+    private static ResponseEntity<ReservationResponse> respond(ReplicaReads.Read<Reservation> read) {
+        return ResponseEntity.ok().header("X-Read-Source", read.source()).body(ReservationResponse.of(read.value()));
     }
 
     @PostMapping("/{reservationId}/claim")

@@ -15,7 +15,8 @@ import lab.inventory.domain.exception.ErrorCode;
  * 规范化后的预留请求：重复维度已合并、按 InventoryKey 升序、TTL 已显式默认化。
  * 幂等 hash 只基于这里的内容，不基于原始 JSON。
  */
-public record CanonicalReservationRequest(long shopId, int ttlSeconds, List<Line> lines, int totalQuantity) {
+public record CanonicalReservationRequest(long shopId, int ttlSeconds, List<Line> lines, int totalQuantity,
+        byte[] intentHash) {
 
     public static final int MAX_INPUT_LINES = 100;
     public static final int MAX_DIMENSIONS = 20;
@@ -27,8 +28,19 @@ public record CanonicalReservationRequest(long shopId, int ttlSeconds, List<Line
     public record Line(InventoryKey key, int quantity) {
     }
 
-    /** 未经合并的输入行；数量用 Long 接收以便精确检查溢出。 */
-    public record RawLine(Long inventoryItemId, Long locationId, Long quantity) {
+    /**
+     * 未经合并的输入行；数量用 Long 接收以便精确检查溢出。
+     * locationIds 是按优先级排列的候选地点，与 locationId 二选一，只由 {@link FulfillmentRequest} 解析。
+     */
+    public record RawLine(Long inventoryItemId, Long locationId, Long quantity, List<Long> locationIds) {
+
+        public RawLine(Long inventoryItemId, Long locationId, Long quantity) {
+            this(inventoryItemId, locationId, quantity, null);
+        }
+
+        public boolean flexible() {
+            return locationIds != null;
+        }
     }
 
     public static CanonicalReservationRequest of(long shopId, Integer ttlSeconds, List<RawLine> rawLines) {
@@ -50,6 +62,10 @@ public record CanonicalReservationRequest(long shopId, int ttlSeconds, List<Line
 
         Map<InventoryKey, Long> merged = new TreeMap<>();
         for (RawLine raw : rawLines) {
+            if (raw != null && raw.flexible()) {
+                throw ApiException.invalidArgument(
+                        "locationIds (candidate locations) is only supported by the main reservation API.");
+            }
             if (raw == null || raw.inventoryItemId() == null || raw.locationId() == null || raw.quantity() == null) {
                 throw ApiException.invalidArgument("Each line requires inventoryItemId, locationId and quantity.");
             }
@@ -79,10 +95,18 @@ public record CanonicalReservationRequest(long shopId, int ttlSeconds, List<Line
             }
             lines.add(new Line(entry.getKey(), (int) quantity));
         }
-        return new CanonicalReservationRequest(shopId, ttl, List.copyOf(lines), (int) total);
+        return new CanonicalReservationRequest(shopId, ttl, List.copyOf(lines), (int) total, null);
+    }
+
+    /** 由候选地点解析出的具体请求，幂等 hash 仍是客户端原始意图（含候选列表）的 hash。 */
+    public CanonicalReservationRequest withIntentHash(byte[] hash) {
+        return new CanonicalReservationRequest(shopId, ttlSeconds, lines, totalQuantity, hash.clone());
     }
 
     public byte[] sha256() {
+        if (intentHash != null) {
+            return intentHash.clone();
+        }
         StringBuilder canonical = new StringBuilder("reserve:v1|shop=").append(shopId)
                 .append("|ttl=").append(ttlSeconds);
         for (Line line : lines) {

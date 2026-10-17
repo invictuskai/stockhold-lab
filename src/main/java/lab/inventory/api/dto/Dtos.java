@@ -67,7 +67,8 @@ public final class Dtos {
         }
     }
 
-    public record ReserveLine(Long inventoryItemId, Long locationId, Long quantity) {
+    /** locationId 与 locationIds（按优先级排列的候选地点）二选一。 */
+    public record ReserveLine(Long inventoryItemId, Long locationId, Long quantity, List<Long> locationIds) {
     }
 
     public record ReserveRequest(Integer ttlSeconds, List<ReserveLine> lines) {

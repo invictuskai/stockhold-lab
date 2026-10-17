@@ -10,6 +10,10 @@ public enum BusinessOperation {
     ADMIN("admin"),
     QUERY("query"),
     BENCHMARK("benchmark"),
+    /** 压测注入：模拟文章中结账路径上其他代码的长事务（文章的标签示例即 checkout_completion）。 */
+    CHECKOUT_COMPLETION("checkout_completion"),
+    /** 压测：与预留共用数据库的其他业务（购物车更新 + 下单）。 */
+    NEIGHBOR("neighbor"),
     UNTAGGED("untagged");
 
     private final String tag;

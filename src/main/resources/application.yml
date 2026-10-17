@@ -82,6 +82,10 @@ stockhold:
   expiry:
     job-enabled: true
     batch-size: 200
+  replica:
+    # 可选只读副本：设置后，公开查询接口在 consistency=eventual 时读副本（compose 的 replica profile）。
+    url: ${STOCKHOLD_REPLICA_DB_URL:}
+    pool-size: ${STOCKHOLD_REPLICA_POOL_SIZE:8}
   admin:
     # 管理接口默认关闭；dev profile 开启并要求 STOCKHOLD_ADMIN_TOKEN。
     enabled: false

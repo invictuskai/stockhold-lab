@@ -13,6 +13,7 @@ import java.util.regex.Pattern;
 import lab.inventory.application.PoolRefillService.RefillResult;
 import lab.inventory.config.StockholdProperties;
 import lab.inventory.domain.CanonicalReservationRequest;
+import lab.inventory.domain.FulfillmentRequest;
 import lab.inventory.domain.InventoryKey;
 import lab.inventory.domain.Reservation;
 import lab.inventory.domain.exception.ApiException;
@@ -40,6 +41,7 @@ public class ReservationFacade {
     }
 
     private final ReservationTransactionService transactions;
+    private final ReserveBatcher batcher;
     private final PoolRefillService refills;
     private final ReservationRepository reservations;
     private final InventoryLedgerRepository ledgers;
@@ -49,10 +51,12 @@ public class ReservationFacade {
     private final Semaphore admission;
     private final Map<InventoryKey, Integer> capacityCache = new ConcurrentHashMap<>();
 
-    public ReservationFacade(ReservationTransactionService transactions, PoolRefillService refills,
+    public ReservationFacade(ReservationTransactionService transactions, ReserveBatcher batcher,
+            PoolRefillService refills,
             ReservationRepository reservations, InventoryLedgerRepository ledgers, TransactionRunner runner,
             InventoryMetrics metrics, StockholdProperties properties) {
         this.transactions = transactions;
+        this.batcher = batcher;
         this.refills = refills;
         this.reservations = reservations;
         this.ledgers = ledgers;
@@ -68,8 +72,8 @@ public class ReservationFacade {
         String outcome = "error";
         try (BusinessOperationContext.Scope ignored = BusinessOperationContext.open(BusinessOperation.RESERVE)) {
             requireToken(idempotencyKey, "Idempotency-Key");
-            CanonicalReservationRequest request = CanonicalReservationRequest.of(shopId, ttlSeconds, rawLines);
-            ReserveOutcome result = reserveAdmitted(idempotencyKey, request);
+            FulfillmentRequest intent = FulfillmentRequest.of(shopId, ttlSeconds, rawLines);
+            ReserveOutcome result = reserveAdmitted(idempotencyKey, intent);
             outcome = result.replayed() ? "replayed" : "created";
             return result;
         } catch (ApiException e) {
@@ -81,7 +85,7 @@ public class ReservationFacade {
     }
 
     /** 有限并发入口：重试不得扩大为无界线程或无界排队。 */
-    private ReserveOutcome reserveAdmitted(String idempotencyKey, CanonicalReservationRequest request) {
+    private ReserveOutcome reserveAdmitted(String idempotencyKey, FulfillmentRequest intent) {
         boolean admitted;
         try {
             admitted = admission.tryAcquire(config.admissionWaitMillis(), TimeUnit.MILLISECONDS);
@@ -93,10 +97,53 @@ public class ReservationFacade {
             throw new ApiException(ErrorCode.TOO_MANY_REQUESTS, "Too many concurrent reservation requests.");
         }
         try {
-            return reserveWithRetry(idempotencyKey, request);
+            return reserveFulfilling(idempotencyKey, intent);
         } finally {
             admission.release();
         }
+    }
+
+    /**
+     * 文章：只从能履约的地点预留。候选行先用首选地点；若该地点库存不足、未初始化或超出其池容量，
+     * 换下一个候选整单重试（整单原子，不拆分到多个地点）。所有候选都不行时报库存不足。
+     */
+    private ReserveOutcome reserveFulfilling(String idempotencyKey, FulfillmentRequest intent) {
+        int[] choice = new int[intent.flexibleLines().size()];
+        while (true) {
+            try {
+                return reserveWithRetry(idempotencyKey, intent.resolve(choice));
+            } catch (ApiException e) {
+                int line = failingFlexibleLine(intent, choice, e);
+                if (line < 0) {
+                    throw e;
+                }
+                FulfillmentRequest.FlexibleLine failed = intent.flexibleLines().get(line);
+                if (++choice[line] >= failed.candidateLocationIds().size()) {
+                    throw new ApiException(ErrorCode.INSUFFICIENT_STOCK,
+                            "No candidate location can fulfill this line on its own.",
+                            Map.of("inventoryItemId", failed.inventoryItemId(),
+                                    "locationIds", failed.candidateLocationIds()));
+                }
+                metrics.fulfillmentFallback();
+            }
+        }
+    }
+
+    /** 失败是否由某个候选行当前选中的地点造成；是则返回该行下标，否则返回 -1。 */
+    private static int failingFlexibleLine(FulfillmentRequest intent, int[] choice, ApiException e) {
+        if (e.code() != ErrorCode.INSUFFICIENT_STOCK && e.code() != ErrorCode.INVENTORY_NOT_FOUND
+                && e.code() != ErrorCode.QUANTITY_LIMIT_EXCEEDED) {
+            return -1;
+        }
+        Object item = e.details().get("inventoryItemId");
+        Object location = e.details().get("locationId");
+        for (int i = 0; i < choice.length; i++) {
+            InventoryKey key = intent.chosenKey(i, choice);
+            if (Long.valueOf(key.inventoryItemId()).equals(item) && Long.valueOf(key.locationId()).equals(location)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private ReserveOutcome reserveWithRetry(String idempotencyKey, CanonicalReservationRequest request) {
@@ -116,16 +163,23 @@ public class ReservationFacade {
 
         UUID reservationId = UUID.randomUUID();
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(config.budgetMillis());
+        int immediateRetries = 0;
         for (int attempt = 1;; attempt++) {
             String retryReason;
             boolean backoff = true;
             try {
-                return new ReserveOutcome(transactions.tryReserve(reservationId, idempotencyKey, request), false);
+                Reservation created = batcher.applies(request)
+                        ? batcher.tryReserve(reservationId, idempotencyKey, request)
+                        : transactions.tryReserve(reservationId, idempotencyKey, request);
+                return new ReserveOutcome(created, false);
             } catch (PoolNotReadyException e) {
                 // reserve 事务已整体结束并归还连接，现在才允许补充（锁序 ledger -> units）。
                 metrics.poolMiss();
-                backoff = !refillLacking(e.lackingLines());
-                retryReason = "pool";
+                // 文章：补充期间同一商品的其他预留等待，池补满后立即继续。若补充发现池已被别人补满（本次插入 0），
+                // 也立即重试一次；再次缺行才说明单位被未提交的竞争者锁着，此时才退避。
+                backoff = !refillLacking(e.lackingLines())
+                        && (!config.refillImmediateRetry() || immediateRetries++ > 0);
+                retryReason = backoff ? "pool" : "pool_ready";
             } catch (RuntimeException e) {
                 if (SqlErrors.isDuplicateKey(e, ReservationRepository.IDEMPOTENCY_INDEX)) {
                     // 并发首建由唯一约束仲裁；当前事务已回滚，再用新的读取查询已有记录。
@@ -264,7 +318,7 @@ public class ReservationFacade {
         }
     }
 
-    private static void requireToken(String value, String name) {
+    static void requireToken(String value, String name) {
         if (value == null || !TOKEN.matcher(value).matches()) {
             throw ApiException.invalidArgument(name + " must be 1..128 characters of [A-Za-z0-9._:-].");
         }

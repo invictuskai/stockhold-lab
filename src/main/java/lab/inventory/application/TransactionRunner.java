@@ -1,6 +1,7 @@
 package lab.inventory.application;
 
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import lab.inventory.config.StockholdProperties;
@@ -12,6 +13,7 @@ import lab.inventory.persistence.SqlErrors;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -36,6 +38,11 @@ public class TransactionRunner {
     }
 
     public <T> T execute(BusinessOperation operation, Supplier<T> body) {
+        return executeWithStatus(operation, status -> body.get());
+    }
+
+    /** 同 {@link #execute}，回调可以拿到事务状态以使用保存点（跨结账批量预留用它隔离各个成员）。 */
+    public <T> T executeWithStatus(BusinessOperation operation, Function<TransactionStatus, T> body) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             // 禁止在未结束的事务里再开事务：外层会占着锁和连接等待内层。
             throw new IllegalStateException("Inventory transactions must not be nested");
@@ -43,7 +50,7 @@ public class TransactionRunner {
         long start = System.nanoTime();
         boolean committed = false;
         try (BusinessOperationContext.Scope ignored = BusinessOperationContext.open(operation)) {
-            T result = template.execute(status -> body.get());
+            T result = template.execute(body::apply);
             committed = true;
             return result;
         } finally {

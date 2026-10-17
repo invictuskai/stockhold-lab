@@ -19,7 +19,9 @@ public record StockholdProperties(
             @DefaultValue("150") long jitterMaxMillis,
             @DefaultValue("64") int maxConcurrent,
             @DefaultValue("200") long admissionWaitMillis,
-            @DefaultValue("false") boolean unionAllSelect) {
+            @DefaultValue("false") boolean unionAllSelect,
+            // 池已被别人补满时立即重试一次（文章：补满后等待的预留立即继续）；false 时退避，供对照实验使用。
+            @DefaultValue("true") boolean refillImmediateRetry) {
     }
 
     public record Transaction(

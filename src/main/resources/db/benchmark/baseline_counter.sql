@@ -46,3 +46,23 @@ CREATE TABLE IF NOT EXISTS baseline_reserved_quantities (
     UNIQUE KEY uq_reserved_dimension (shop_id, reservation_id, inventory_item_id, location_id),
     KEY idx_reserved_inventory (shop_id, inventory_item_id, location_id, reservation_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- “安全的邻居”实验（文章：预留与购物车更新、支付、下单共用数据库）：模拟同库的其他业务负载。
+CREATE TABLE IF NOT EXISTS baseline_neighbor_carts (
+    cart_id     BIGINT NOT NULL PRIMARY KEY,
+    version     BIGINT NOT NULL DEFAULT 0,
+    updated_at  DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS baseline_neighbor_orders (
+    order_id      BINARY(16) NOT NULL PRIMARY KEY,
+    cart_id       BIGINT NOT NULL,
+    amount_cents  BIGINT NOT NULL,
+    created_at    DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    KEY idx_neighbor_order_cart (cart_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+SET SESSION cte_max_recursion_depth = 10001;
+INSERT IGNORE INTO baseline_neighbor_carts (cart_id)
+WITH RECURSIVE seq (n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 10000)
+SELECT n FROM seq;

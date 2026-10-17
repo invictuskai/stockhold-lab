@@ -56,7 +56,7 @@ public class MigrationController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestBody ReserveRequest request) {
         List<RawLine> lines = request.lines() == null ? null : request.lines().stream()
-                .map(l -> l == null ? null : new RawLine(l.inventoryItemId(), l.locationId(), l.quantity()))
+                .map(l -> l == null ? null : new RawLine(l.inventoryItemId(), l.locationId(), l.quantity(), l.locationIds()))
                 .toList();
         MigrationService.Result result = migration.reserve(shopId, idempotencyKey, request.ttlSeconds(), lines);
         HttpStatus status = result.outcome().category() == Outcome.Category.CREATED ? HttpStatus.CREATED
@@ -116,6 +116,18 @@ public class MigrationController {
             keys.add(new InventoryKey(shopId, item, locationId));
         }
         return migration.consistency(shopId, keys);
+    }
+
+    /** 旧系统自身的账实差异：确认的两步无法原子提交，失败会在这里留下非零 drift。 */
+    @AdminApi
+    @GetMapping("/shops/{shopId}/legacy-drift")
+    public List<LegacyRedisReservations.LegacyDrift> legacyDrift(@PathVariable long shopId,
+            @RequestParam List<Long> items, @RequestParam long locationId) {
+        List<InventoryKey> keys = new ArrayList<>();
+        for (Long item : items) {
+            keys.add(new InventoryKey(shopId, item, locationId));
+        }
+        return migration.legacyDrift(keys);
     }
 
     @AdminApi

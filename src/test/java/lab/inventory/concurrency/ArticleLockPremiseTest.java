@@ -122,6 +122,127 @@ class ArticleLockPremiseTest extends IntegrationTestBase {
         }
     }
 
+    /**
+     * 文章：RR 下空池上的 SKIP LOCKED 持有间隙锁，“阻塞补充插入并可能导致死锁”。两个预留同时扫描同一个空池时，
+     * 各自的间隙锁互相兼容；随后两边都插入（补充）时，插入意向锁互相等待对方的间隙锁，形成死锁。
+     */
+    @Test
+    void repeatableReadGapLocksDeadlockTwoConcurrentRefillInserts() throws Exception {
+        assertThat(gapLockRaceErrorCodes(Connection.TRANSACTION_REPEATABLE_READ, newShop())).contains(1213);
+    }
+
+    @Test
+    void readCommittedHasNoGapLockSoConcurrentRefillInsertsBothSucceed() throws Exception {
+        assertThat(gapLockRaceErrorCodes(Connection.TRANSACTION_READ_COMMITTED, newShop())).containsOnly(0);
+    }
+
+    /** 两个会话先在同一个空池上做锁定读，再各自插入；返回两次插入的错误码（0 表示成功）。 */
+    private static List<Integer> gapLockRaceErrorCodes(int isolation, long shopId) throws Exception {
+        try (Connection first = openSession(); Connection second = openSession()) {
+            for (Connection session : List.of(first, second)) {
+                session.setTransactionIsolation(isolation);
+                session.setAutoCommit(false);
+                assertThat(selectEmptyPool(session, shopId)).isZero();
+            }
+            java.util.concurrent.CompletableFuture<Integer> firstInsert =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() -> errorCode(() -> insertUnit(first, shopId)));
+            Thread.sleep(200); // 让第一个插入先进入等待（RR）或完成（RC）
+            int secondCode = errorCode(() -> insertUnit(second, shopId));
+            int firstCode = firstInsert.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            first.rollback();
+            second.rollback();
+            return List.of(firstCode, secondCode);
+        }
+    }
+
+    /**
+     * 文章的锁顺序问题：一条路径先写 reserved_quantities 再删 reservation_units，另一条路径反过来，
+     * 两者争同一行明细和同一个单位时形成循环等待；统一为“先单位、后明细”后只会排队，不会死锁。
+     */
+    @Test
+    void oppositeTableOrderDeadlocksWhileTheArticlesOrderOnlyWaits() throws Exception {
+        assertThat(tableOrderRace(true)).contains(1213);
+        assertThat(tableOrderRace(false)).doesNotContain(1213);
+    }
+
+    /** 返回两个会话第二步的错误码；opposite 为 true 时第一个会话按文章修正前的顺序（先明细后单位）执行。 */
+    private List<Integer> tableOrderRace(boolean opposite) throws Exception {
+        long shopId = newShop();
+        var key = createInventory(shopId, ITEM_A, LOCATION_X, 1, 1);
+        refills.refillOneDimension(key, false);
+        byte[] unit = jdbc.queryForObject("SELECT unit_id FROM reservation_units WHERE shop_id = ?", byte[].class,
+                shopId);
+        byte[] reservationId = Codec.uuidToBytes(UUID.randomUUID());
+        try (Connection first = openSession(); Connection second = openSession()) {
+            first.setAutoCommit(false);
+            second.setAutoCommit(false);
+            Step deleteUnitFirst = () -> deleteUnit(first, shopId, unit);
+            Step insertDetailFirst = () -> insertDetail(first, shopId, reservationId);
+            // 第一个会话先完成一步：修正前的顺序先写明细，修正后的顺序先删单位。
+            (opposite ? insertDetailFirst : deleteUnitFirst).run();
+            // 第二个会话按修正后的顺序：先删单位。修正后它会在这里等待第一个会话，因此放到后台执行。
+            java.util.concurrent.CompletableFuture<Integer> secondPath =
+                    java.util.concurrent.CompletableFuture.supplyAsync(() -> errorCode(() -> {
+                        deleteUnit(second, shopId, unit);
+                        insertDetail(second, shopId, reservationId);
+                        return 0;
+                    }));
+            Thread.sleep(200);
+            int firstCode = errorCode(() -> {
+                (opposite ? deleteUnitFirst : insertDetailFirst).run();
+                return 0;
+            });
+            if (firstCode == 0) {
+                first.commit();
+            } else {
+                first.rollback();
+            }
+            int secondCode = secondPath.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            second.rollback();
+            return List.of(firstCode, secondCode);
+        }
+    }
+
+    @FunctionalInterface
+    private interface Step {
+        void run() throws SQLException;
+    }
+
+    @FunctionalInterface
+    private interface SqlCall {
+        int call() throws SQLException;
+    }
+
+    private static int errorCode(SqlCall call) {
+        try {
+            call.call();
+            return 0;
+        } catch (SQLException e) {
+            return e.getErrorCode();
+        }
+    }
+
+    private static void deleteUnit(Connection session, long shopId, byte[] unit) throws SQLException {
+        try (PreparedStatement delete = session.prepareStatement("DELETE FROM reservation_units"
+                + " WHERE shop_id = ? AND inventory_item_id = ? AND location_id = ? AND unit_id = ?")) {
+            bindDimension(delete, shopId, ITEM_A, LOCATION_X);
+            delete.setBytes(4, unit);
+            delete.executeUpdate();
+        }
+    }
+
+    private static void insertDetail(Connection session, long shopId, byte[] reservationId) throws SQLException {
+        try (PreparedStatement insert = session.prepareStatement("INSERT INTO reserved_quantities"
+                + " (shop_id, reservation_id, line_no, inventory_item_id, location_id, quantity)"
+                + " VALUES (?, ?, 1, ?, ?, 1)")) {
+            insert.setLong(1, shopId);
+            insert.setBytes(2, reservationId);
+            insert.setLong(3, ITEM_A);
+            insert.setLong(4, LOCATION_X);
+            insert.executeUpdate();
+        }
+    }
+
     private static Connection openSession() throws SQLException {
         MySqlTestDatabase.Coordinates db = MySqlTestDatabase.resolve();
         return DriverManager.getConnection(db.url(), db.username(), db.password());

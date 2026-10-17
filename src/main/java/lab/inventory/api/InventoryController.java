@@ -7,7 +7,9 @@ import lab.inventory.api.dto.Dtos.OperationResponse;
 import lab.inventory.api.dto.Dtos.RefillResponse;
 import lab.inventory.application.InventoryService;
 import lab.inventory.application.InventoryService.OperationOutcome;
+import lab.inventory.application.ReplicaReads;
 import lab.inventory.domain.InventoryKey;
+import lab.inventory.domain.InventorySnapshot;
 import lab.inventory.domain.exception.ApiException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -16,6 +18,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -23,9 +26,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class InventoryController {
 
     private final InventoryService inventory;
+    private final ReplicaReads replicaReads;
 
-    public InventoryController(InventoryService inventory) {
+    public InventoryController(InventoryService inventory, ReplicaReads replicaReads) {
         this.inventory = inventory;
+        this.replicaReads = replicaReads;
     }
 
     @AdminApi
@@ -55,10 +60,14 @@ public class InventoryController {
         return OperationResponse.of(outcome.operation());
     }
 
+    /** consistency=eventual 时允许从只读副本读取（可能落后于主库）；默认 strong 读主库。 */
     @GetMapping("/{itemId}/locations/{locationId}")
-    public InventorySnapshotResponse snapshot(@PathVariable long shopId, @PathVariable long itemId,
-            @PathVariable long locationId) {
-        return InventorySnapshotResponse.of(inventory.snapshot(new InventoryKey(shopId, itemId, locationId)));
+    public ResponseEntity<InventorySnapshotResponse> snapshot(@PathVariable long shopId, @PathVariable long itemId,
+            @PathVariable long locationId, @RequestParam(required = false) String consistency) {
+        ReplicaReads.Read<InventorySnapshot> read = replicaReads.snapshot(new InventoryKey(shopId, itemId, locationId),
+                ReplicaReads.Consistency.parse(consistency));
+        return ResponseEntity.ok().header("X-Read-Source", read.source())
+                .body(InventorySnapshotResponse.of(read.value()));
     }
 
     @AdminApi

@@ -2,6 +2,7 @@ package lab.inventory.benchmark;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -42,10 +43,18 @@ public class BenchmarkController {
 
     private final BaselineCounterService baseline;
     private final DataSource dataSource;
+    private final NeighborWorkload neighbors;
 
-    public BenchmarkController(BaselineCounterService baseline, DataSource dataSource) {
+    public BenchmarkController(BaselineCounterService baseline, DataSource dataSource, NeighborWorkload neighbors) {
         this.baseline = baseline;
         this.dataSource = dataSource;
+        this.neighbors = neighbors;
+    }
+
+    /** 与预留共用数据库的其他业务的一次“结账”（购物车更新 + 下单），用于观察预留负载是否拖累邻居。 */
+    @PostMapping("/neighbor")
+    public Map<String, Object> neighbor() {
+        return Map.of("cartVersion", neighbors.checkout());
     }
 
     @AdminApi
@@ -67,7 +76,7 @@ public class BenchmarkController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestBody ReserveRequest request) {
         List<RawLine> lines = request.lines() == null ? null : request.lines().stream()
-                .map(l -> l == null ? null : new RawLine(l.inventoryItemId(), l.locationId(), l.quantity()))
+                .map(l -> l == null ? null : new RawLine(l.inventoryItemId(), l.locationId(), l.quantity(), l.locationIds()))
                 .toList();
         ReserveOutcome outcome = baseline.reserve(shopId, idempotencyKey, request.ttlSeconds(), lines);
         ReservationResponse body = ReservationResponse.of(outcome.reservation());
@@ -109,8 +118,24 @@ public class BenchmarkController {
                     throw new CannotGetJdbcConnectionException("Could not obtain a connection to hold", e);
                 }
             }
+            case "transaction" -> {
+                // 文章的真实元凶：结账路径上其他代码开启事务、执行语句后长时间不提交，事务期间一直占着后端连接。
+                try (BusinessOperationContext.Scope ignored =
+                        BusinessOperationContext.open(BusinessOperation.CHECKOUT_COMPLETION);
+                        Connection connection = dataSource.getConnection()) {
+                    connection.setAutoCommit(false);
+                    try (Statement statement = connection.createStatement()) {
+                        statement.execute(BusinessOperationContext.tag("SELECT COUNT(*) FROM inventory_ledger"
+                                + " WHERE shop_id = 0"));
+                    }
+                    Thread.sleep(millis);
+                    connection.commit();
+                } catch (SQLException e) {
+                    throw new CannotGetJdbcConnectionException("Could not run the held transaction", e);
+                }
+            }
             case "outside" -> Thread.sleep(millis);
-            default -> throw ApiException.invalidArgument("mode must be 'connection' or 'outside'.");
+            default -> throw ApiException.invalidArgument("mode must be 'connection', 'transaction' or 'outside'.");
         }
         return Map.of("mode", mode, "heldMillis", millis);
     }

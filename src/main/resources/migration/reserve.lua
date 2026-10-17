@@ -1,5 +1,5 @@
 -- 旧系统（文章中被替换的 Redis 方案）的整单预留：一个脚本内原子地检查并扣减所有维度的可售计数。
--- KEYS[1] 预留哈希  KEYS[2] 到期 ZSET  KEYS[3..] 各维度可售计数（按 InventoryKey 升序）
+-- KEYS[1] 预留哈希  KEYS[2] 到期 ZSET  之后每个维度两把键：可售计数、已预留计数（按 InventoryKey 升序）
 -- ARGV[1] 规范化请求 SHA-256  ARGV[2] 编码后的明细  ARGV[3] TTL 秒  ARGV[4] 幂等键  ARGV[5..] 各维度数量
 local existing = redis.call('HGET', KEYS[1], 'hash')
 if existing then
@@ -8,9 +8,9 @@ if existing then
   end
   return {'REPLAYED', redis.call('HGET', KEYS[1], 'status')}
 end
-local dimensions = #KEYS - 2
+local dimensions = (#KEYS - 2) / 2
 for i = 1, dimensions do
-  local available = redis.call('GET', KEYS[i + 2])
+  local available = redis.call('GET', KEYS[2 * i + 1])
   if not available then
     return {'NOT_FOUND', tostring(i)}
   end
@@ -19,7 +19,8 @@ for i = 1, dimensions do
   end
 end
 for i = 1, dimensions do
-  redis.call('DECRBY', KEYS[i + 2], ARGV[i + 4])
+  redis.call('DECRBY', KEYS[2 * i + 1], ARGV[i + 4])
+  redis.call('INCRBY', KEYS[2 * i + 2], ARGV[i + 4])
 end
 local time = redis.call('TIME')
 local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)

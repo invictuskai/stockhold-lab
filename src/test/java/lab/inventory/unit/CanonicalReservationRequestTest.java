@@ -31,6 +31,28 @@ class CanonicalReservationRequestTest {
         assertThat(request.totalQuantity()).isEqualTo(10);
     }
 
+    /** 只有固定地点的请求经由 FulfillmentRequest 后，hash 与原有 v1 完全相同：已有幂等键不会因升级变成冲突。 */
+    @Test
+    void fixedOnlyIntentKeepsTheV1HashAndCandidatesChangeIt() {
+        List<RawLine> fixed = List.of(new RawLine(2001L, 3001L, 3L));
+        byte[] v1 = CanonicalReservationRequest.of(1001, 300, fixed).sha256();
+        assertThat(lab.inventory.domain.FulfillmentRequest.of(1001, 300, fixed).resolve(new int[0]).sha256())
+                .isEqualTo(v1);
+
+        byte[] flexible = lab.inventory.domain.FulfillmentRequest.of(1001, 300,
+                List.of(new RawLine(2001L, null, 3L, List.of(3001L, 3002L)))).resolve(new int[] {0}).sha256();
+        byte[] reordered = lab.inventory.domain.FulfillmentRequest.of(1001, 300,
+                List.of(new RawLine(2001L, null, 3L, List.of(3002L, 3001L)))).resolve(new int[] {0}).sha256();
+        byte[] secondChoice = lab.inventory.domain.FulfillmentRequest.of(1001, 300,
+                List.of(new RawLine(2001L, null, 3L, List.of(3001L, 3002L)))).resolve(new int[] {1}).sha256();
+        assertThat(flexible).isNotEqualTo(v1).isNotEqualTo(reordered);
+        // 解析到哪个候选不影响意图 hash。
+        assertThat(secondChoice).isEqualTo(flexible);
+        assertThatThrownBy(() -> CanonicalReservationRequest.of(1001, 300,
+                List.of(new RawLine(2001L, null, 3L, List.of(3001L)))))
+                .isInstanceOf(ApiException.class);
+    }
+
     @Test
     void hashIgnoresLineOrderSplitLinesAndImplicitDefaultTtl() {
         byte[] reference = CanonicalReservationRequest.of(1001, 300, List.of(

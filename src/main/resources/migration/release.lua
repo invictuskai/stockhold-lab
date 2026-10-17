@@ -1,5 +1,5 @@
 -- 旧系统的取消 / 到期释放：把额度加回各维度的可售计数，状态机与 MySQL 方案一致。
--- KEYS[1] 预留哈希  KEYS[2] 到期 ZSET  KEYS[3..] 各维度可售计数
+-- KEYS[1] 预留哈希  KEYS[2] 到期 ZSET  之后每个维度两把键：可售计数、已预留计数
 -- ARGV[1] 目标状态 CANCELLED | EXPIRED  ARGV[2] 幂等键  ARGV[3..] 各维度数量
 local status = redis.call('HGET', KEYS[1], 'status')
 if not status then
@@ -22,8 +22,9 @@ if target == 'EXPIRED' then
     return {'NOT_DUE', status}
   end
 end
-for i = 3, #KEYS do
-  redis.call('INCRBY', KEYS[i], ARGV[i])
+for i = 1, (#KEYS - 2) / 2 do
+  redis.call('INCRBY', KEYS[2 * i + 1], ARGV[i + 2])
+  redis.call('DECRBY', KEYS[2 * i + 2], ARGV[i + 2])
 end
 redis.call('HSET', KEYS[1], 'status', target)
 redis.call('ZREM', KEYS[2], ARGV[2])
