@@ -1,0 +1,368 @@
+{
+  "group": "E10X",
+  "title": "ProxySQL 后端连接耗尽：长事务元凶的定位",
+  "config": "exhaust-hold-connection",
+  "rep": 2,
+  "app_env": {
+    "STOCKHOLD_DB_URL": "jdbc:mysql://127.0.0.1:36033/stockhold?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&sessionVariables=transaction_isolation='READ-COMMITTED',innodb_lock_wait_timeout=1&characterEncoding=UTF-8",
+    "STOCKHOLD_DB_POOL_SIZE": "32"
+  },
+  "instances": 1,
+  "k6_env": {
+    "VUS": 50,
+    "HOLD_VUS": 16,
+    "HOLD_MODE": "connection",
+    "HOLD_MILLIS": 100,
+    "ITEM_COUNT": 10
+  },
+  "mode": "pool",
+  "script": "connection-hold.js",
+  "items": 10,
+  "capacity": 1000,
+  "seed_on_hand": 1000000,
+  "duration": "60s",
+  "wall_seconds": 63.2,
+  "k6_exit": 0,
+  "warmup_exit": 0,
+  "k6": {
+    "http_req_duration{op:cancel}": {
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0,
+      "avg": 0,
+      "med": 0
+    },
+    "http_req_sending": {
+      "p(95)": 0.015,
+      "p(99)": 0.027,
+      "max": 0.582,
+      "avg": 0.00899391393793732,
+      "med": 0.009
+    },
+    "http_req_duration": {
+      "p(99)": 142.6265,
+      "max": 2087.384,
+      "avg": 56.62502351562969,
+      "med": 45.195,
+      "p(95)": 129.98925
+    },
+    "vus_max": {
+      "min": 66,
+      "max": 66,
+      "value": 66
+    },
+    "http_req_duration{op:reserve}": {
+      "avg": 47.94421058261881,
+      "med": 44.017,
+      "p(95)": 74.12899999999998,
+      "p(99)": 106.79480000000001,
+      "max": 2087.384
+    },
+    "http_req_connecting": {
+      "p(95)": 0,
+      "p(99)": 0.086,
+      "max": 1.372,
+      "avg": 0.001973041316646668,
+      "med": 0
+    },
+    "data_sent": {
+      "count": 18847122,
+      "rate": 303575.6345816396
+    },
+    "data_received": {
+      "count": 39579918,
+      "rate": 637524.3245912696
+    },
+    "http_req_failed": {
+      "passes": 0,
+      "fails": 69996,
+      "value": 0
+    },
+    "iterations": {
+      "count": 69996,
+      "rate": 1127.4442919283085
+    },
+    "reserve_created": {
+      "rate": 1008.8142672118677,
+      "count": 62631
+    },
+    "iteration_duration": {
+      "max": 2087.509166,
+      "avg": 56.697970966112656,
+      "med": 45.2701665,
+      "p(95)": 130.032521,
+      "p(99)": 142.67377915
+    },
+    "http_req_duration{op:claim}": {
+      "avg": 0,
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0
+    },
+    "http_req_blocked": {
+      "p(99)": 0.10604999999999938,
+      "max": 3.326,
+      "avg": 0.003966498085607379,
+      "med": 0.002,
+      "p(95)": 0.003
+    },
+    "http_reqs": {
+      "rate": 1127.4442919283085,
+      "count": 69996
+    },
+    "http_req_tls_handshaking": {
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0,
+      "avg": 0,
+      "med": 0
+    },
+    "http_req_duration{expected_response:true}": {
+      "max": 2087.384,
+      "avg": 56.62502351562969,
+      "med": 45.195,
+      "p(95)": 129.98925,
+      "p(99)": 142.6265
+    },
+    "http_req_waiting": {
+      "p(99)": 142.59105,
+      "max": 2087.262,
+      "avg": 56.58577314418029,
+      "med": 45.156499999999994,
+      "p(95)": 129.95049999999998
+    },
+    "vus": {
+      "value": 3,
+      "min": 3,
+      "max": 66
+    },
+    "http_req_receiving": {
+      "p(99)": 0.087,
+      "max": 1.462,
+      "avg": 0.030256457511855017,
+      "med": 0.028,
+      "p(95)": 0.058
+    },
+    "http_reqs{op:reserve}": {
+      "count": 62631,
+      "rate": 1008.8142672118677
+    }
+  },
+  "app_metrics_delta": {
+    "hikaricp_connections_acquire_seconds_count{pool=\"stockhold\"}": 70256.0,
+    "hikaricp_connections_acquire_seconds_sum{pool=\"stockhold\"}": 2028.837,
+    "hikaricp_connections_usage_seconds_count{pool=\"stockhold\"}": 70256.0,
+    "hikaricp_connections_usage_seconds_sum{pool=\"stockhold\"}": 1927.669,
+    "stockhold_connection_acquire_seconds_count{op=\"benchmark\"}": 7425.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"benchmark\"}": 217.873961,
+    "stockhold_connection_acquire_seconds_count{op=\"expiry\"}": 60.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"expiry\"}": 1.513149,
+    "stockhold_connection_acquire_seconds_count{op=\"refill\"}": 140.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"refill\"}": 3.828364,
+    "stockhold_connection_acquire_seconds_count{op=\"reserve\"}": 62631.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"reserve\"}": 1806.256804,
+    "stockhold_connection_hold_seconds_count{op=\"benchmark\"}": 7425.0,
+    "stockhold_connection_hold_seconds_sum{op=\"benchmark\"}": 743.087009,
+    "stockhold_connection_hold_seconds_count{op=\"expiry\"}": 60.0,
+    "stockhold_connection_hold_seconds_sum{op=\"expiry\"}": 0.150833,
+    "stockhold_connection_hold_seconds_count{op=\"refill\"}": 140.0,
+    "stockhold_connection_hold_seconds_sum{op=\"refill\"}": 3.856486,
+    "stockhold_connection_hold_seconds_count{op=\"reserve\"}": 62631.0,
+    "stockhold_connection_hold_seconds_sum{op=\"reserve\"}": 1180.730344,
+    "stockhold_operation_seconds_count{op=\"reserve\",outcome=\"created\"}": 62631.0,
+    "stockhold_operation_seconds_sum{op=\"reserve\",outcome=\"created\"}": 2987.881453,
+    "stockhold_refill_units_count{trigger=\"background\"}": 80.0,
+    "stockhold_refill_units_sum{trigger=\"background\"}": 66129.0,
+    "stockhold_sql_seconds_count{op=\"benchmark\"}": 60.0,
+    "stockhold_sql_seconds_sum{op=\"benchmark\"}": 0.126022,
+    "stockhold_sql_seconds_count{op=\"expiry\"}": 60.0,
+    "stockhold_sql_seconds_sum{op=\"expiry\"}": 0.148309,
+    "stockhold_sql_seconds_count{op=\"refill\"}": 1000.0,
+    "stockhold_sql_seconds_sum{op=\"refill\"}": 2.732954,
+    "stockhold_sql_seconds_count{op=\"reserve\"}": 313155.0,
+    "stockhold_sql_seconds_sum{op=\"reserve\"}": 632.47348,
+    "stockhold_transaction_seconds_count{op=\"refill\",result=\"commit\"}": 80.0,
+    "stockhold_transaction_seconds_sum{op=\"refill\",result=\"commit\"}": 5.795009,
+    "stockhold_transaction_seconds_count{op=\"reserve\",result=\"commit\"}": 62631.0,
+    "stockhold_transaction_seconds_sum{op=\"reserve\",result=\"commit\"}": 2987.276914
+  },
+  "mysql_delta": {
+    "Innodb_rows_deleted": 62631.0,
+    "Innodb_rows_inserted": 191391.0,
+    "Innodb_rows_updated": 80.0,
+    "Questions": 527158.0
+  },
+  "samples": {
+    "hikari_pending": {
+      "avg": 29.318,
+      "max": 36.0,
+      "samples": 22
+    },
+    "hikari_active": {
+      "avg": 27.636,
+      "max": 32.0,
+      "samples": 22
+    },
+    "app_process_cpu": {
+      "avg": 0.071,
+      "max": 0.084,
+      "samples": 22
+    },
+    "host_system_cpu": {
+      "avg": 0.702,
+      "max": 0.772,
+      "samples": 22
+    },
+    "threads_running": {
+      "avg": 6.545,
+      "max": 18.0,
+      "samples": 22
+    },
+    "mysql_container_cpu_percent": {
+      "avg": 91.459,
+      "max": 108.36,
+      "samples": 22
+    }
+  },
+  "audit": {
+    "valid": true,
+    "dimensions": [
+      {
+        "item": 2001,
+        "valid": true,
+        "H": 1000000,
+        "A": 8380,
+        "P": 1000,
+        "R": 7380,
+        "violations": []
+      },
+      {
+        "item": 2002,
+        "valid": true,
+        "H": 1000000,
+        "A": 8445,
+        "P": 1000,
+        "R": 7445,
+        "violations": []
+      },
+      {
+        "item": 2003,
+        "valid": true,
+        "H": 1000000,
+        "A": 8344,
+        "P": 728,
+        "R": 7616,
+        "violations": []
+      },
+      {
+        "item": 2004,
+        "valid": true,
+        "H": 1000000,
+        "A": 8445,
+        "P": 958,
+        "R": 7487,
+        "violations": []
+      },
+      {
+        "item": 2005,
+        "valid": true,
+        "H": 1000000,
+        "A": 8428,
+        "P": 1000,
+        "R": 7428,
+        "violations": []
+      },
+      {
+        "item": 2006,
+        "valid": true,
+        "H": 1000000,
+        "A": 8522,
+        "P": 945,
+        "R": 7577,
+        "violations": []
+      },
+      {
+        "item": 2007,
+        "valid": true,
+        "H": 1000000,
+        "A": 8590,
+        "P": 1000,
+        "R": 7590,
+        "violations": []
+      },
+      {
+        "item": 2008,
+        "valid": true,
+        "H": 1000000,
+        "A": 8453,
+        "P": 1000,
+        "R": 7453,
+        "violations": []
+      },
+      {
+        "item": 2009,
+        "valid": true,
+        "H": 1000000,
+        "A": 8633,
+        "P": 1000,
+        "R": 7633,
+        "violations": []
+      },
+      {
+        "item": 2010,
+        "valid": true,
+        "H": 1000000,
+        "A": 8493,
+        "P": 999,
+        "R": 7494,
+        "violations": []
+      }
+    ]
+  },
+  "extra": {
+    "proxy_digest_by_tag": {
+      "refill": {
+        "statements": 995,
+        "sql_seconds": 1.8579789999999998
+      },
+      "reserve": {
+        "statements": 313155,
+        "sql_seconds": 383.876128
+      },
+      "untagged": {
+        "statements": 250844,
+        "sql_seconds": 333.771172
+      },
+      "benchmark": {
+        "statements": 55,
+        "sql_seconds": 0.061028
+      },
+      "expiry": {
+        "statements": 55,
+        "sql_seconds": 0.087121
+      }
+    },
+    "proxy_events": 565104,
+    "proxy_backend_seconds_per_second_by_tag": {
+      "benchmark": 0.001,
+      "expiry": 0.001,
+      "refill": 0.052,
+      "reserve": 13.99,
+      "untagged": 1.602
+    },
+    "proxy_transactions_by_tag": {
+      "reserve": 63372,
+      "refill": 82,
+      "untagged": 85
+    },
+    "proxy_backend_conn_used": {
+      "avg": 14.0,
+      "max": 16
+    }
+  },
+  "replica_catch_up_wait_s": null,
+  "k6_log_tail": "",
+  "proxysql_version": "2.7.3-12-g50b7f85",
+  "proxysql_backend_max_connections": 16
+}

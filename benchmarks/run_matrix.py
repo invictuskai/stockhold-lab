@@ -32,7 +32,8 @@ LOCATION_ID = 3001
 # 账本必须最先清空：应用的后台补充任务一直在运行，若先清单位表，它会按尚未清掉的旧账本把池补满，
 # 留下没有账本额度对应的“孤儿单位”，下一次运行的 A = P + R 就会差出一个池容量。
 TABLES = ['inventory_ledger', 'inventory_operations', 'reservation_units', 'reservations', 'reserved_quantities',
-          'baseline_inventory_counter', 'baseline_reservations', 'baseline_reserved_quantities']
+          'baseline_inventory_counter', 'baseline_reservations', 'baseline_reserved_quantities',
+          'baseline_neighbor_orders']
 
 
 def experiments():
@@ -67,6 +68,58 @@ def experiments():
                k6=dict(VUS=50, ITEM_COUNT=1, CART_DIMENSIONS=1, QUANTITY=1))
           for capacity in (50, 1000)]
     groups.append(dict(id='E5', title='单热点池容量：50 vs 1000', app_env={}, configs=e5))
+
+    def hot(name, mode='pool', vus=50, script='reserve-only.js', **extra):
+        return dict(name=name, script=script, mode=mode, items=1, capacity=1000,
+                    k6=dict(VUS=vus, ITEM_COUNT=1, CART_DIMENSIONS=1, QUANTITY=1, **extra))
+
+    # E12：文章——InnoDB 线程并发度多年前被保守设置、从未复查，调高后消除了一个瓶颈。
+    # 在数据库成为瓶颈的区间（64 连接、100 并发）比较保守值与不限制（0）。
+    for concurrency in (1, 2, 4, 8, 0):
+        groups.append(dict(id='E12', title='InnoDB 线程并发度：保守设置 vs 不限制',
+                           app_env={'STOCKHOLD_DB_POOL_SIZE': '64'},
+                           mysql_globals={'innodb_thread_concurrency': concurrency},
+                           configs=[hot(f'pool-itc{concurrency}-vus100', vus=100)]))
+
+    # E13：文章——部分读流量移到副本。每次预留伴随 4 次库存查询，strong 读主库、eventual 读副本。
+    groups.append(dict(id='E13', title='读流量移到只读副本：strong（主库）vs eventual（副本）',
+                       app_env={'STOCKHOLD_REPLICA_DB_URL': '${REPLICA_URL}'}, wait_replica=True,
+                       configs=[dict(name=f'read-mix-{c}', script='read-mix.js', mode='pool', items=10, capacity=1000,
+                                     k6=dict(VUS=50, ITEM_COUNT=10, CART_DIMENSIONS=1, QUANTITY=1, READS=4,
+                                             CONSISTENCY=c)) for c in ('strong', 'eventual')]))
+
+    # E14：文章——跨结账把预留合并进一次 SKIP LOCKED 查询以减少连接使用。
+    for batching in ('false', 'true'):
+        groups.append(dict(id='E14', title='跨结账批量预留：关闭 vs 开启',
+                           app_env={'STOCKHOLD_RESERVE_BATCHING_ENABLED': batching},
+                           configs=[hot(f'batching-{"on" if batching == "true" else "off"}-vus{v}', vus=v)
+                                    for v in (50, 200)]))
+
+    # E15：文章——“安全的邻居”。邻居业务以固定到达率运行，比较叠加单位池 / 单计数器热点预留时邻居的延迟。
+    groups.append(dict(id='E15', title='与其他业务共用数据库：邻居延迟', app_env={},
+                       configs=[dict(name=name, script='neighbors.js', mode=mode, items=1, capacity=1000,
+                                     k6=dict(NEIGHBOR_RATE=300, RESERVE_VUS=vus, ITEM_COUNT=1, CART_DIMENSIONS=1,
+                                             QUANTITY=1))
+                                for name, mode, vus in (('neighbors-only', 'pool', 0),
+                                                        ('neighbors-with-pool', 'pool', 100),
+                                                        ('neighbors-with-counter', 'counter', 100))]))
+
+    # E15b：邻居跑在独立的应用进程（各自的连接池）上，只保留数据库层面的相互影响。
+    groups.append(dict(id='E15b', title='与其他业务共用数据库：邻居在独立应用进程上', app_env={}, instances=2,
+                       configs=[dict(name=name, script='neighbors.js', mode=mode, items=1, capacity=1000,
+                                     k6=dict(NEIGHBOR_RATE=300, RESERVE_VUS=vus, ITEM_COUNT=1, CART_DIMENSIONS=1,
+                                             QUANTITY=1, BASE_URLS=f'http://127.0.0.1:{BASE_PORT}',
+                                             NEIGHBOR_BASE_URL=f'http://127.0.0.1:{BASE_PORT + 1}'))
+                                for name, mode, vus in (('separate-neighbors-only', 'pool', 0),
+                                                        ('separate-neighbors-with-pool', 'pool', 100),
+                                                        ('separate-neighbors-with-counter', 'counter', 100))]))
+
+    # E16：补充期间等待的预留在池补满后立即继续（文章第 25 条）。同一批次内对照：退避（旧行为）vs 立即重试。
+    for immediate in ('false', 'true'):
+        groups.append(dict(id='E16', title='池补满即继续：退避 vs 立即重试',
+                           app_env={'STOCKHOLD_RESERVE_REFILL_IMMEDIATE_RETRY': immediate},
+                           configs=[hot(f'{"immediate" if immediate == "true" else "backoff"}-vus{v}', vus=v)
+                                    for v in (10, 50, 200)]))
 
     # E7：连接数扫描，检验“单位池卡在连接池上”的推测；单计数器作对照（瓶颈应在行锁，不随连接数变化）。
     for size in (8, 16, 32, 64):
@@ -255,7 +308,8 @@ def mysql_counters():
     rows = mysql("""
         SELECT VARIABLE_NAME, VARIABLE_VALUE FROM performance_schema.global_status
          WHERE VARIABLE_NAME IN ('Innodb_row_lock_waits', 'Innodb_row_lock_time', 'Com_commit', 'Com_rollback',
-                                 'Questions', 'Innodb_rows_inserted', 'Innodb_rows_deleted', 'Innodb_rows_updated')
+                                 'Questions', 'Com_select', 'Innodb_rows_inserted', 'Innodb_rows_deleted',
+                                 'Innodb_rows_updated')
         UNION ALL
         SELECT NAME, COUNT FROM information_schema.INNODB_METRICS WHERE NAME IN ('lock_deadlocks', 'lock_timeouts');""")
     return {name: float(value) for name, value in rows}
@@ -269,8 +323,9 @@ def delta(after, before):
 class Sampler(threading.Thread):
     """测量窗口内约每 2 秒采样一次 Hikari pending、应用 CPU、MySQL Threads_running 与容器 CPU。"""
 
-    def __init__(self):
+    def __init__(self, replica=False):
         super().__init__(daemon=True)
+        self.replica = replica
         self.stop = threading.Event()
         self.samples = []
         self.container = subprocess.run(compose_cmd() + ['ps', '-q', 'mysql'], capture_output=True, text=True,
@@ -295,6 +350,8 @@ class Sampler(threading.Thread):
                 stats = subprocess.run(['docker', 'stats', '--no-stream', '--format', '{{.CPUPerc}}',
                                         self.container], capture_output=True, text=True, timeout=10).stdout
                 sample['mysql_container_cpu_percent'] = float(stats.strip().rstrip('%') or 0)
+                if self.replica:
+                    sample['replica_lag_seconds'] = replica_lag_seconds()
             except Exception as e:  # 采样失败不影响测量本身
                 sample['error'] = str(e)
             self.samples.append(sample)
@@ -303,8 +360,8 @@ class Sampler(threading.Thread):
     def summary(self):
         result = {}
         for key in ('hikari_pending', 'hikari_active', 'app_process_cpu', 'host_system_cpu', 'threads_running',
-                    'mysql_container_cpu_percent'):
-            values = [s[key] for s in self.samples if key in s]
+                    'mysql_container_cpu_percent', 'replica_lag_seconds'):
+            values = [s[key] for s in self.samples if s.get(key) is not None]
             if values:
                 result[key] = dict(avg=round(sum(values) / len(values), 3), max=round(max(values), 3),
                                    samples=len(values))
@@ -314,9 +371,11 @@ class Sampler(threading.Thread):
 # ---------------------------------------------------------------- 运行
 
 def k6(config, env, duration, summary_path, quiet=True):
-    variables = dict(config['k6'], MODE=config['mode'], SHOP_ID=SHOP_ID, FIRST_ITEM_ID=FIRST_ITEM_ID,
+    # 配置里的 k6 变量优先（例如 E15b 把预留与邻居发往不同的应用进程）。
+    variables = dict(MODE=config['mode'], SHOP_ID=SHOP_ID, FIRST_ITEM_ID=FIRST_ITEM_ID,
                      LOCATION_ID=LOCATION_ID, WARMUP='1s', DURATION=duration, ADMIN_TOKEN=env['STOCKHOLD_ADMIN_TOKEN'],
                      BASE_URLS=','.join(f'http://127.0.0.1:{port}' for port in PORTS))
+    variables.update(config['k6'])
     command = ['k6', 'run', '--quiet', '--summary-export', str(summary_path)]
     for key, value in variables.items():
         command += ['-e', f'{key}={value}']
@@ -326,13 +385,36 @@ def k6(config, env, duration, summary_path, quiet=True):
 
 
 def k6_metrics(summary_path):
+    """保留全部 k6 指标（含各脚本的自定义计数器，例如 read_ok、neighbor_ok）。"""
     metrics = json.loads(Path(summary_path).read_text())['metrics']
-    keep = {}
-    for name, values in metrics.items():
-        if name.startswith(('http_req_duration{op:', 'http_reqs', 'reserve_', 'checks', 'iterations',
-                            'http_req_failed')):
-            keep[name] = {k: v for k, v in values.items() if k != 'thresholds'}
-    return keep
+    return {name: {k: v for k, v in values.items() if k != 'thresholds'} for name, values in metrics.items()}
+
+
+def replica_sql(sql):
+    command = compose_cmd() + ['exec', '-T', 'mysql-replica', 'sh', '-c',
+                               'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -N -B']
+    result = subprocess.run(command, input=sql, capture_output=True, text=True, cwd=ROOT, check=True)
+    return [line.split('\t') for line in result.stdout.splitlines() if line]
+
+
+def wait_for_replica(timeout_seconds=600):
+    """等副本应用完主库当前已执行的全部事务；返回等待秒数。"""
+    executed = mysql('SELECT @@GLOBAL.gtid_executed;')[0][0].replace('\n', '')
+    started = time.time()
+    result = replica_sql(f"SELECT WAIT_FOR_EXECUTED_GTID_SET('{executed}', {timeout_seconds});")[0][0]
+    if result != '0':
+        raise RuntimeError(f'replica did not catch up within {timeout_seconds}s')
+    return round(time.time() - started, 1)
+
+
+def replica_lag_seconds():
+    for line in subprocess.run(compose_cmd() + ['exec', '-T', 'mysql-replica', 'sh', '-c',
+                                                'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -e "SHOW REPLICA STATUS\\G"'],
+                               capture_output=True, text=True, cwd=ROOT).stdout.splitlines():
+        if 'Seconds_Behind_Source:' in line:
+            value = line.split(':', 1)[1].strip()
+            return None if value == 'NULL' else float(value)
+    return None
 
 
 def run_once(group, config, rep, env, args, out_dir, on_hand, hooks=None):
@@ -345,9 +427,10 @@ def run_once(group, config, rep, env, args, out_dir, on_hand, hooks=None):
         raise RuntimeError(f'audit failed right after seeding: {initial}')
     scratch = out_dir / 'scratch'
     scratch.mkdir(exist_ok=True)
+    replica_wait = wait_for_replica() if group.get('wait_replica') else None
     warm_code, warm_log = k6(config, env, args.warmup, scratch / 'warmup.json')
     prom_before, db_before = prometheus(), mysql_counters()
-    sampler = Sampler()
+    sampler = Sampler(replica=bool(group.get('wait_replica')))
     sampler.start()
     if hooks:
         hooks.start()
@@ -366,6 +449,7 @@ def run_once(group, config, rep, env, args, out_dir, on_hand, hooks=None):
         k6_exit=code, warmup_exit=warm_code, k6=k6_metrics(scratch / 'measure.json'),
         app_metrics_delta=delta(prom_after, prom_before), mysql_delta=delta(db_after, db_before),
         samples=sampler.summary(), audit=audit(config, env, on_hand), extra=extra,
+        replica_catch_up_wait_s=replica_wait,
         k6_log_tail=log if code != 0 else '')
 
 
@@ -404,19 +488,38 @@ def main():
     for group in experiments():
         if only and group['id'] not in only:
             continue
-        overrides = {k: v for k, v in group['app_env'].items()}
+        replica_url = env['STOCKHOLD_DB_URL'].replace(':33306/', ':' + env.get('STOCKHOLD_REPLICA_DB_PORT', '33307') + '/')
+        overrides = {k: v.replace('${REPLICA_URL}', replica_url) for k, v in group['app_env'].items()}
         (args.out / 'scratch').mkdir(exist_ok=True)
-        with App(env, overrides, args.out / 'scratch', group['id'], group.get('instances', 1)):
-            for config in group['configs']:
-                for rep in range(1, args.reps + 1):
-                    target = args.out / f"{group['id']}-{config['name']}-r{rep}.json"
-                    print(f"[{time.strftime('%H:%M:%S')}] {group['id']} {config['name']} rep {rep}", flush=True)
-                    result = run_once(group, config, rep, env, args, args.out, args.on_hand)
-                    target.write_text(json.dumps(result, ensure_ascii=False, indent=2))
-                    reserve = result['k6'].get('reserve_created', {})
-                    print(f"    created/s={reserve.get('rate', 0):.1f} audit_valid={result['audit']['valid']}"
-                          f" k6_exit={result['k6_exit']}", flush=True)
+        saved = apply_mysql_globals(group.get('mysql_globals', {}))
+        try:
+            run_group(group, env, overrides, args)
+        finally:
+            apply_mysql_globals(saved)
     shutil.rmtree(args.out / 'scratch', ignore_errors=True)
+
+
+def apply_mysql_globals(settings):
+    """SET GLOBAL 给定变量并返回原值，供组结束后恢复。"""
+    saved = {}
+    for name, value in settings.items():
+        saved[name] = mysql(f'SELECT @@GLOBAL.{name};')[0][0]
+        mysql(f'SET GLOBAL {name} = {int(value)};')
+    return saved
+
+
+def run_group(group, env, overrides, args):
+    with App(env, overrides, args.out / 'scratch', group['id'], group.get('instances', 1)):
+        for config in group['configs']:
+            for rep in range(1, args.reps + 1):
+                target = args.out / f"{group['id']}-{config['name']}-r{rep}.json"
+                print(f"[{time.strftime('%H:%M:%S')}] {group['id']} {config['name']} rep {rep}", flush=True)
+                result = run_once(group, config, rep, env, args, args.out, args.on_hand)
+                result['mysql_globals'] = group.get('mysql_globals', {})
+                target.write_text(json.dumps(result, ensure_ascii=False, indent=2))
+                reserve = result['k6'].get('reserve_created', {})
+                print(f"    created/s={reserve.get('rate', 0):.1f} audit_valid={result['audit']['valid']}"
+                      f" k6_exit={result['k6_exit']}", flush=True)
 
 
 if __name__ == '__main__':

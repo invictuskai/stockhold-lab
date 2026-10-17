@@ -1,0 +1,21 @@
+{
+  "host_cpu": "Apple M1 Max",
+  "host_cpus": "10",
+  "host_memory_bytes": "68719476736",
+  "os": "15.8",
+  "docker_vm": "4 CPU / 8307167232 bytes / Ubuntu 24.04.4 LTS",
+  "java": "openjdk version \"21.0.8\" 2025-07-15 LTS",
+  "k6": "k6 v2.3.0 (commit/devel, go1.27.1, darwin/arm64)",
+  "commit": "59d40f8",
+  "dirty": true,
+  "mysql": {
+    "version": "8.4.11",
+    "transaction_isolation": "READ-COMMITTED",
+    "innodb_thread_concurrency": "0",
+    "max_connections": "300",
+    "innodb_lock_wait_timeout": "1",
+    "innodb_buffer_pool_size": "134217728"
+  },
+  "hikari_max": "16",
+  "reserve_max_concurrent": "256 (benchmark profile)"
+}

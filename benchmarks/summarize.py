@@ -135,9 +135,37 @@ def main():
                              fmt([metric(r, 'k6', 'checks', 'value') * 100 for r in items], 2, '%')])
             out.append('')
             out.append(table(['配置', 'claim P99 ms', 'cancel P99 ms', 'claim/cancel 成功率'], life))
+        if any('http_req_duration{op:neighbor}' in items[0]['k6'] for _, items in configs):
+            neighbor = []
+            for config, items in configs:
+                ok = [metric(r, 'k6', 'neighbor_ok', 'rate') for r in items]
+                failed = [metric(r, 'k6', 'neighbor_failed', 'count') for r in items]
+                neighbor.append([config, fmt(ok, 0),
+                                 fmt([metric(r, 'k6', 'http_req_duration{op:neighbor}', 'med') for r in items], 1),
+                                 fmt([metric(r, 'k6', 'http_req_duration{op:neighbor}', 'p(95)') for r in items], 1),
+                                 fmt([metric(r, 'k6', 'http_req_duration{op:neighbor}', 'p(99)') for r in items], 1),
+                                 int(sum(failed)), fmt([metric(r, 'k6', 'reserve_created', 'rate') for r in items], 0)])
+            out.append('')
+            out.append(table(['配置', '邻居成功/s', '邻居 P50 ms', '邻居 P95 ms', '邻居 P99 ms', '邻居失败', '同时的成功预留/s'],
+                             neighbor))
+        if any('http_req_duration{op:read}' in items[0]['k6'] for _, items in configs):
+            reads = []
+            for config, items in configs:
+                reads.append([config, fmt([metric(r, 'k6', 'read_ok', 'rate') for r in items], 0),
+                              fmt([metric(r, 'k6', 'read_from_replica', 'count') / max(metric(r, 'k6', 'read_ok', 'count'), 1)
+                                   * 100 for r in items], 0, '%'),
+                              fmt([metric(r, 'k6', 'http_req_duration{op:read}', 'p(99)') for r in items], 1),
+                              fmt([per_second(r, r['mysql_delta'].get('Com_select', 0.0)) for r in items], 0),
+                              fmt([per_second(r, r['mysql_delta'].get('Questions', 0.0)) for r in items], 0)])
+            out.append('')
+            out.append(table(['配置', '查询成功/s', '由副本服务', '查询 P99 ms', '主库 Com_select/s', '主库 Questions/s'],
+                             reads))
         if any(items[0].get('extra', {}).get('proxy_backend_seconds_per_second_by_tag') for _, items in configs):
             proxy = []
             for config, items in configs:
+                injected = ('checkout_completion' if items[0]['k6_env'].get('HOLD_MODE') == 'transaction'
+                            else 'benchmark')
+
                 def backend(tag):
                     return [r['extra']['proxy_backend_seconds_per_second_by_tag'].get(tag, 0.0) for r in items]
 
@@ -145,7 +173,7 @@ def main():
                     return [per_second(r, app(r, f'stockhold_connection_hold_seconds_sum{{op="{tag}"}}'))
                             for r in items]
                 proxy.append([config, fmt(app_hold('reserve'), 2), fmt(backend('reserve'), 2),
-                              fmt(app_hold('benchmark'), 2), fmt(backend('benchmark'), 2),
+                              f'{injected}: ' + fmt(app_hold(injected), 2), fmt(backend(injected), 2),
                               fmt([r['extra']['proxy_backend_conn_used']['avg'] for r in items], 1),
                               fmt([r['extra']['proxy_backend_conn_used']['max'] for r in items], 0)])
             out.append('')

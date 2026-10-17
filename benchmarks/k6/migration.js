@@ -7,7 +7,23 @@ import { check } from 'k6';
 import { Counter } from 'k6/metrics';
 import { cartLines, OP_TRENDS, postWithRetry, SHOP_ID, stages, TTL_SECONDS } from './lib.js';
 
-const PATH = `/api/v1/migration/shops/${SHOP_ID}/reservations`;
+// 逐步上线演练：SHOPS="5001:1,5002:2,..." 按权重把流量分给多个店铺（代表文章中的 pod）；未设置时只用 SHOP_ID。
+const SHOPS = (__ENV.SHOPS || `${SHOP_ID}:1`).split(',').map((entry) => {
+  const [shop, weight] = entry.split(':');
+  return { shop: Number(shop), weight: Number(weight || 1) };
+});
+const TOTAL_WEIGHT = SHOPS.reduce((sum, s) => sum + s.weight, 0);
+
+function pickShop() {
+  let roll = Math.random() * TOTAL_WEIGHT;
+  for (const s of SHOPS) {
+    roll -= s.weight;
+    if (roll < 0) {
+      return s.shop;
+    }
+  }
+  return SHOPS[SHOPS.length - 1].shop;
+}
 
 const created = new Counter('reserve_created');
 const reserveFailed = new Counter('reserve_failed');
@@ -22,9 +38,11 @@ export const options = {
 };
 
 export default function () {
+  const shop = pickShop();
+  const PATH = `/api/v1/migration/shops/${shop}/reservations`;
   const key = `mig-${__VU}-${__ITER}-${Date.now()}`;
   const { response } = postWithRetry(PATH, JSON.stringify({ ttlSeconds: TTL_SECONDS, lines: cartLines() }),
-    { headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key }, tags: { op: 'reserve' } });
+    { headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key }, tags: { op: 'reserve', shop: String(shop) } });
   if (!response || response.status !== 201) {
     reserveFailed.add(1);
     return;

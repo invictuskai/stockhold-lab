@@ -9,6 +9,10 @@ services:
       - --max-connections=300
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_0900_ai_ci
+      # GTID 复制：供可选的只读副本（replica profile）按 GTID 自动定位。
+      - --server-id=1
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
     environment:
       MYSQL_ROOT_PASSWORD: ${STOCKHOLD_DB_ROOT_PASSWORD:?set STOCKHOLD_DB_ROOT_PASSWORD in .env}
       MYSQL_DATABASE: stockhold
@@ -27,6 +31,40 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+  # docker compose --profile replica up -d && scripts/replica-setup.sh：只读副本（文章：部分读流量移到副本）。
+  # 首次初始化后由脚本用带 GTID 的逻辑备份装载并开始复制，再开启 super_read_only。
+  mysql-replica:
+    image: mysql:8.4
+    profiles: [replica]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command:
+      - --default-time-zone=+00:00
+      - --transaction-isolation=READ-COMMITTED
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --server-id=2
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --relay-log=relay-bin
+      # 只读副本常用的取舍：放宽刷盘、多线程并行应用。实测默认（每事务两次 fsync、4 个应用线程）
+      # 在与主库同一虚拟机时跟不上约 1,700 事务/秒的写入，落后可达十余分钟。
+      - --innodb-flush-log-at-trx-commit=2
+      - --sync-binlog=0
+      - --replica-parallel-workers=8
+    environment:
+      MYSQL_ROOT_PASSWORD: ${STOCKHOLD_DB_ROOT_PASSWORD:?set STOCKHOLD_DB_ROOT_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${STOCKHOLD_REPLICA_DB_PORT:-33307}:3306"
+    volumes:
+      - ./.mysql-data/replica:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h 127.0.0.1 -uroot --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
 
   # docker compose --profile migration up -d：旧 Redis 预留系统，供影子迁移实验（migration profile）使用。
   redis:

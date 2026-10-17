@@ -144,7 +144,15 @@ def tag_of(text):
 
 
 class ProxyHooks:
-    """测量窗口内：重置并读取代理侧的查询摘要；约每 100 ms 采样代理的会话表，估算各标签占用后端连接的时间。"""
+    """测量窗口内：
+    - 用 ProxySQL 的查询事件日志重建每个客户端会话的事务：事务从第一条语句到 COMMIT / ROLLBACK
+      （或结束它的 SET autocommit=1）期间一直占着后端连接，整段时间归给事务中第一条带标签语句的业务标签；
+      自动提交的单条语句按其执行时间归因。这对应文章中“ProxySQL 解析标签、测量每个调用方持有连接的时间”。
+      （会话表采样做不到：事务内空闲时 ProxySQL 不显示属于哪段代码。）
+    - 约每 100 ms 采样一次后端连接池的使用数。
+    - 代理侧的查询摘要（按标签的语句数与执行时间）。"""
+
+    EVENTS_DIR = '/tmp/stockhold-events'
 
     def __init__(self, admin, seconds):
         self.admin = admin
@@ -152,23 +160,31 @@ class ProxyHooks:
         self.process = None
         self.lines = []
         self.reader = None
+        self.started = None
 
     def start(self):
-        self.admin.query('SELECT COUNT(*) FROM stats_mysql_query_digest_reset')
+        subprocess.run(rm.compose_cmd() + ['exec', '-T', 'proxysql', 'sh', '-c',
+                                           f'mkdir -p {self.EVENTS_DIR} && rm -f {self.EVENTS_DIR}/*'],
+                       cwd=ROOT, check=True, capture_output=True)
+        self.admin.query(f"SET mysql-eventslog_filename='{self.EVENTS_DIR}/q'; SET mysql-eventslog_format=2;"
+                         " SET mysql-eventslog_default_log=1; LOAD MYSQL VARIABLES TO RUNTIME; PROXYSQL FLUSH LOGS;"
+                         " SELECT COUNT(*) FROM stats_mysql_query_digest_reset")
         loop = (f'end=$(( $(date +%s) + {self.seconds} )); while [ $(date +%s) -lt $end ]; do '
                 'mysql -h proxysql -P6032 -uradmin -N -B -e "'
-                "SELECT 'S', SessionID, IFNULL(srv_host, ''), command, IFNULL(info, '') FROM stats_mysql_processlist;"
                 "SELECT 'P', SUM(ConnUsed), SUM(ConnFree) FROM stats_mysql_connection_pool;"
-                '"; echo "#"; sleep 0.1; done')
+                '"; sleep 0.1; done')
         self.process = subprocess.Popen(
             rm.compose_cmd() + ['exec', '-T', '-e', f'MYSQL_PWD={self.admin.password}', 'mysql', 'sh', '-c', loop],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, cwd=ROOT)
         self.reader = threading.Thread(target=lambda: self.lines.extend(self.process.stdout), daemon=True)
         self.reader.start()
+        self.started = time.time()
 
     def stop(self):
         self.process.wait(30)
         self.reader.join(10)
+        window = time.time() - self.started
+        self.admin.query('SET mysql-eventslog_default_log=0; LOAD MYSQL VARIABLES TO RUNTIME; PROXYSQL FLUSH LOGS;')
         digests = {}
         for text, count, sum_time in self.admin.query(
                 'SELECT digest_text, count_star, sum_time FROM stats_mysql_query_digest'):
@@ -176,33 +192,67 @@ class ProxyHooks:
             entry = digests.setdefault(tag, dict(statements=0, sql_seconds=0.0))
             entry['statements'] += int(count)
             entry['sql_seconds'] += int(sum_time) / 1e6
-        samples, backend, last_tag, used = 0, {}, {}, []
-        for line in self.lines:
-            line = line.rstrip('\n')
-            if line == '#':
-                samples += 1
-                continue
-            parts = line.split('\t')
-            if parts[0] == 'P' and len(parts) >= 2 and parts[1] not in ('', 'NULL'):
-                used.append(int(parts[1]))
-            elif parts[0] == 'S' and len(parts) >= 5:
-                session, server, info = parts[1], parts[2], parts[4]
-                tag = tag_of(info)
-                if tag:
-                    last_tag[session] = tag
-                if server:
-                    # 持有后端连接：正在执行的语句带标签；事务内空闲时归给该会话最近一次看到的标签。
-                    key = tag or last_tag.get(session, 'unknown')
-                    backend[key] = backend.get(key, 0) + 1
-        interval = self.seconds / max(samples, 1)
-        return dict(proxy_digest_by_tag=digests, proxy_samples=samples, proxy_sample_interval_s=round(interval, 3),
-                    proxy_backend_seconds_per_second_by_tag={k: round(v * interval / self.seconds, 3)
-                                                             for k, v in sorted(backend.items())},
+        hold, transactions, events = self.transaction_hold()
+        used = [int(p[1]) for p in (line.rstrip('\n').split('\t') for line in self.lines)
+                if p[0] == 'P' and len(p) >= 2 and p[1] not in ('', 'NULL')]
+        return dict(proxy_digest_by_tag=digests, proxy_events=events,
+                    proxy_backend_seconds_per_second_by_tag={k: round(v / window, 3) for k, v in sorted(hold.items())},
+                    proxy_transactions_by_tag=transactions,
                     proxy_backend_conn_used=dict(avg=round(sum(used) / len(used), 2) if used else None,
                                                  max=max(used) if used else None))
 
+    def transaction_hold(self):
+        """从事件日志按会话重建事务，返回（各标签的后端占用秒数, 各标签的事务数, 事件数）。"""
+        raw = subprocess.run(rm.compose_cmd() + ['exec', '-T', 'proxysql', 'sh', '-c',
+                                                 f'cat {self.EVENTS_DIR}/q.* 2>/dev/null; rm -f {self.EVENTS_DIR}/*'],
+                             cwd=ROOT, capture_output=True, text=True).stdout
+        sessions = {}
+        events = 0
+        for line in raw.splitlines():
+            if not line.startswith('{'):
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            events += 1
+            sessions.setdefault(event['thread_id'], []).append(
+                (event['starttime_timestamp_us'], event['endtime_timestamp_us'], event.get('query', '')))
+        hold, transactions = {}, {}
 
-def proxysql(args, env):
+        def charge(tag, micros, transaction):
+            tag = tag or 'untagged'
+            hold[tag] = hold.get(tag, 0.0) + micros / 1e6
+            if transaction:
+                transactions[tag] = transactions.get(tag, 0) + 1
+
+        for timeline in sessions.values():
+            timeline.sort()
+            autocommit, tx_start, tx_tag = True, None, None
+            for begin, finish, query in timeline:
+                text = query.strip().lower()
+                if text.startswith('set autocommit=0') or text in ('begin', 'start transaction'):
+                    autocommit = False
+                    continue
+                ends = text in ('commit', 'rollback') or text.startswith('set autocommit=1')
+                if ends:
+                    if tx_start is not None:
+                        charge(tx_tag, finish - tx_start, True)
+                    tx_start, tx_tag = None, None
+                    if text.startswith('set autocommit=1'):
+                        autocommit = True
+                    continue
+                if autocommit:
+                    charge(tag_of(query), finish - begin, False)
+                    continue
+                if tx_start is None:
+                    tx_start = begin
+                if tx_tag is None:
+                    tx_tag = tag_of(query)
+        return hold, transactions, events
+
+
+def start_proxysql(env):
     subprocess.run(rm.compose_cmd() + ['--profile', 'proxysql', 'up', '-d', 'proxysql'], cwd=ROOT, check=True,
                    capture_output=True)
     admin = ProxyAdmin(env)
@@ -215,29 +265,63 @@ def proxysql(args, env):
     port = env.get('STOCKHOLD_PROXYSQL_PORT', '36033')
     url = env['STOCKHOLD_DB_URL'].replace(':33306/', f':{port}/')
     assert url != env['STOCKHOLD_DB_URL'], 'unexpected STOCKHOLD_DB_URL format'
-    configs = [
-        dict(name='proxy-reserve-vus50', script='reserve-only.js', mode='pool', items=10, capacity=1000,
-             k6=dict(VUS=50, ITEM_COUNT=10, CART_DIMENSIONS=1, QUANTITY=1)),
-        dict(name='proxy-hold-outside', script='connection-hold.js', mode='pool', items=10, capacity=1000,
-             k6=dict(VUS=50, HOLD_VUS=16, HOLD_MODE='outside', HOLD_MILLIS=100, ITEM_COUNT=10)),
-        dict(name='proxy-hold-connection', script='connection-hold.js', mode='pool', items=10, capacity=1000,
-             k6=dict(VUS=50, HOLD_VUS=16, HOLD_MODE='connection', HOLD_MILLIS=100, ITEM_COUNT=10)),
-    ]
-    group = dict(id='E10', title='经 ProxySQL：应用侧与代理侧的连接归因', app_env={'STOCKHOLD_DB_URL': url})
+    return admin, url
+
+
+def run_proxy_group(args, env, admin, group, configs, prefix):
     seconds = int(args.duration.rstrip('s'))
-    results = []
-    with rm.App(env, group['app_env'], args.out / 'scratch', 'proxysql'):
+    runs = 0
+    with rm.App(env, group['app_env'], args.out / 'scratch', group['id']):
         for config in configs:
             for rep in range(1, args.reps + 1):
-                log(f"E10 {config['name']} rep {rep}")
+                log(f"{group['id']} {config['name']} rep {rep}")
                 result = rm.run_once(group, config, rep, env, args, args.out, ON_HAND,
                                      hooks=ProxyHooks(admin, seconds))
                 result['proxysql_version'] = admin.query(
                     "SELECT variable_value FROM global_variables WHERE variable_name = 'admin-version'")[0][0]
-                (args.out / f"E10-{config['name']}-r{rep}.json").write_text(
+                result['proxysql_backend_max_connections'] = int(admin.query(
+                    'SELECT MAX(max_connections) FROM runtime_mysql_servers')[0][0])
+                (args.out / f"{prefix}-{config['name']}-r{rep}.json").write_text(
                     json.dumps(result, ensure_ascii=False, indent=2))
-                results.append(result)
-    return dict(experiment='proxysql', runs=len(results))
+                runs += 1
+    return runs
+
+
+def hold_config(name, mode):
+    return dict(name=name, script='connection-hold.js', mode='pool', items=10, capacity=1000,
+                k6=dict(VUS=50, HOLD_VUS=16, HOLD_MODE=mode, HOLD_MILLIS=100, ITEM_COUNT=10))
+
+
+def proxysql(args, env):
+    admin, url = start_proxysql(env)
+    configs = [
+        dict(name='proxy-reserve-vus50', script='reserve-only.js', mode='pool', items=10, capacity=1000,
+             k6=dict(VUS=50, ITEM_COUNT=10, CART_DIMENSIONS=1, QUANTITY=1)),
+        hold_config('proxy-hold-outside', 'outside'),
+        hold_config('proxy-hold-connection', 'connection'),
+    ]
+    group = dict(id='E10', title='经 ProxySQL：应用侧与代理侧的连接归因', app_env={'STOCKHOLD_DB_URL': url})
+    return dict(experiment='proxysql', runs=run_proxy_group(args, env, admin, group, configs, 'E10'))
+
+
+def proxysql_exhaustion(args, env):
+    """文章的排障场景：客户端连接（Hikari 32）多于代理可用的后端连接（16），后端层耗尽；
+    元凶是结账路径上其他代码的长事务（checkout_completion），按标签归因后定位、移除即恢复。"""
+    admin, url = start_proxysql(env)
+    admin.query('UPDATE mysql_servers SET max_connections = 16; LOAD MYSQL SERVERS TO RUNTIME;')
+    try:
+        configs = [
+            dict(name='exhaust-reserve-only', script='reserve-only.js', mode='pool', items=10, capacity=1000,
+                 k6=dict(VUS=50, ITEM_COUNT=10, CART_DIMENSIONS=1, QUANTITY=1)),
+            hold_config('exhaust-hold-transaction', 'transaction'),
+            hold_config('exhaust-hold-connection', 'connection'),
+        ]
+        group = dict(id='E10X', title='ProxySQL 后端连接耗尽：长事务元凶的定位',
+                     app_env={'STOCKHOLD_DB_URL': url, 'STOCKHOLD_DB_POOL_SIZE': '32'})
+        return dict(experiment='proxysql-exhaustion',
+                    runs=run_proxy_group(args, env, admin, group, configs, 'E10X'))
+    finally:
+        admin.query('UPDATE mysql_servers SET max_connections = 64; LOAD MYSQL SERVERS TO RUNTIME;')
 
 
 # ---------------------------------------------------------------- migration
@@ -310,9 +394,101 @@ def migration(args, env):
                     k6_log_tail=k6_output[-3000:])
 
 
+def rollout(args, env):
+    """文章：按 pod 逐步上线，从低流量到最高流量的商家。每个店铺代表一个 pod；所有店铺先进入影子阶段，
+    然后按流量从低到高逐个切换为 MySQL 为主，切换前要求该店铺在观察窗口内影子比对零不一致，否则停止推进。"""
+    subprocess.run(rm.compose_cmd() + ['--profile', 'migration', 'up', '-d', 'redis'], cwd=ROOT, check=True,
+                   capture_output=True)
+    subprocess.run(rm.compose_cmd() + ['exec', '-T', 'redis', 'redis-cli', 'FLUSHALL'], cwd=ROOT, check=True,
+                   capture_output=True)
+    rm.reset_tables()  # 旧系统账本由 legacy-seed 按维度覆盖写入，无需单独清理
+    shops = [(5001, 1), (5002, 2), (5003, 4), (5004, 8)]  # (店铺, 流量权重)，按流量从低到高
+    items, ttl, window = 10, 10, args.seconds / (len(shops) + 2)
+    token = {'X-Admin-Token': env['STOCKHOLD_ADMIN_TOKEN']}
+    scratch = args.out / 'scratch'
+    timeline, gates = [], []
+    with rm.App(env, {}, scratch, 'rollout', instances=2, profiles='dev,benchmark,migration'):
+        for shop, _ in shops:
+            subprocess.run([str(ROOT / 'scripts' / 'seed.sh'), str(shop), str(items), str(ON_HAND), '1000'],
+                           env={**os.environ, **env}, check=True, capture_output=True, cwd=ROOT)
+            for i in range(items):
+                rm.http('POST', f'/api/v1/migration/shops/{shop}/inventory/{rm.FIRST_ITEM_ID + i}/locations/'
+                                f'{rm.LOCATION_ID}/legacy-seed?available={ON_HAND}', headers=token)
+            rm.http('PUT', f'/api/v1/migration/shops/{shop}/mode', {'mode': 'REDIS_PRIMARY'}, headers=token)
+
+        def mismatches_for(shop):
+            total = 0
+            for port in rm.PORTS:
+                _, body = rm.http('GET', '/api/v1/migration/mismatches', headers=token, port=port)
+                total += sum(1 for m in json.loads(body) if m['shopId'] == shop)
+            return total
+
+        k6 = k6_process('migration.js', env, dict(VUS=50, DURATION=f'{args.seconds}s', TTL_SECONDS=ttl,
+                                                  ITEM_COUNT=items,
+                                                  SHOPS=','.join(f'{s}:{w}' for s, w in shops)),
+                        scratch / 'rollout.json')
+        started = time.time()
+        snapshot = rm.prometheus()
+        halted = None
+        for index, (shop, weight) in enumerate(shops):
+            # 每个店铺先在影子阶段观察一个窗口；第一个店铺之前还有一个全体影子窗口。
+            time.sleep(max(0.0, started + (index + 2) * window - time.time()))
+            observed = mismatches_for(shop)
+            gates.append(dict(shop=shop, weight=weight, at_s=round(time.time() - started, 1),
+                              shadow_mismatches=observed, promoted=observed == 0 and halted is None))
+            if observed or halted:
+                halted = halted or shop
+                log(f'rollout halted at shop {shop}: {observed} mismatches')
+                continue
+            rm.http('PUT', f'/api/v1/migration/shops/{shop}/mode', {'mode': 'MYSQL_PRIMARY'}, headers=token)
+            now = rm.prometheus()
+            timeline.append(dict(after_s=round(time.time() - started, 1), promoted_shop=shop,
+                                 metrics_since_previous=rm.delta(now, snapshot)))
+            snapshot = now
+            log(f'shop {shop} (weight {weight}) -> MYSQL_PRIMARY at t={time.time() - started:.1f}s')
+        k6_output = finish(k6)
+        stopped = time.time()
+        log(f'k6 finished (exit {k6.returncode}); polling until every shop converges')
+        item_list = ','.join(str(rm.FIRST_ITEM_ID + i) for i in range(items))
+        final = {}
+        while True:
+            final = {}
+            for shop, _ in shops:
+                _, body = rm.http('GET', f'/api/v1/migration/shops/{shop}/consistency?items={item_list}'
+                                         f'&locationId={rm.LOCATION_ID}', headers=token)
+                final[shop] = json.loads(body)
+            if all(c['consistent'] for c in final.values()) or time.time() - stopped > 180:
+                break
+            time.sleep(5)
+        drift = {}
+        for shop, _ in shops:
+            _, body = rm.http('GET', f'/api/v1/migration/shops/{shop}/legacy-drift?items={item_list}'
+                                     f'&locationId={rm.LOCATION_ID}', headers=token)
+            drift[shop] = sum(abs(d['ledgerOnHand'] - d['redisAvailable'] - d['redisReserved'])
+                              for d in json.loads(body))
+        modes = {shop: json.loads(rm.http('GET', f'/api/v1/migration/shops/{shop}/mode')[1])['mode']
+                 for shop, _ in shops}
+        audits = {}
+        for shop, _ in shops:
+            rows = []
+            for i in range(items):
+                _, body = rm.http('POST', '/api/v1/admin/invariants/check',
+                                  {'shopId': shop, 'inventoryItemId': rm.FIRST_ITEM_ID + i,
+                                   'locationId': rm.LOCATION_ID}, headers=token)
+                rows.append(json.loads(body)['valid'])
+            audits[shop] = all(rows)
+        return dict(experiment='rollout', seconds=args.seconds, shops=shops, gates=gates, halted_at=halted,
+                    final_modes=modes, timeline=timeline, k6_exit=k6.returncode,
+                    k6=counters(scratch / 'rollout.json'),
+                    converged_after_s=round(time.time() - stopped, 1),
+                    consistent={shop: c['consistent'] for shop, c in final.items()},
+                    status_counts={shop: c['mysqlStatusCounts'] for shop, c in final.items()},
+                    legacy_drift_abs=drift, mysql_audit_valid=audits, k6_log_tail=k6_output[-3000:])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('drill', choices=['crash', 'proxysql', 'migration'])
+    parser.add_argument('drill', choices=['crash', 'proxysql', 'proxysql-exhaustion', 'migration', 'rollout'])
     parser.add_argument('--out', required=True, type=Path)
     parser.add_argument('--seconds', type=int, default=90, help='crash / migration 的负载时长')
     parser.add_argument('--reps', type=int, default=3, help='proxysql 每个配置的重复次数')
@@ -321,8 +497,9 @@ def main():
     args = parser.parse_args()
     env = rm.load_env()
     (args.out / 'scratch').mkdir(parents=True, exist_ok=True)
-    result = {'crash': crash, 'proxysql': proxysql, 'migration': migration}[args.drill](args, env)
-    if args.drill != 'proxysql':
+    result = {'crash': crash, 'proxysql': proxysql, 'proxysql-exhaustion': proxysql_exhaustion,
+              'migration': migration, 'rollout': rollout}[args.drill](args, env)
+    if not args.drill.startswith('proxysql'):
         (args.out / f'{args.drill}.json').write_text(json.dumps(result, ensure_ascii=False, indent=2))
     print(json.dumps({k: v for k, v in result.items() if k not in ('k6_log_tail', 'mismatch_samples', 'phases',
                                                                   'app_metrics_delta')},
