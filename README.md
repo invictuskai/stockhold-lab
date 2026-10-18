@@ -121,6 +121,7 @@ k6 脚本在 [benchmarks/k6](benchmarks/k6)，对照组需要 `dev,benchmark` pr
 - [x] M4：业务标签与连接获取 / 持有 / 事务 / SQL 耗时指标、单计数器对照组、UNION ALL 可选路径、k6 脚本与可复现的压测执行器；单机压测报告见 [benchmarks/reports](benchmarks/reports/README.md)。
 - [x] M5（可选）：ProxySQL 连接归因、Redis → MySQL 影子迁移演练、多实例与进程崩溃演练，见[扩展性与故障演练报告](benchmarks/reports/2026-10-16-scaling-and-drills.md)。
 - [x] M6：对照原文补齐其余机制——候选地点（只从能履约的地点预留）、跨结账批量预留、读副本、池补满即继续、旧架构两步确认的超卖 / 少卖复现、RR 死锁与锁序死锁复现、长事务耗尽 ProxySQL 后端的定位、InnoDB 线程并发度、安全的邻居、按 pod 逐步上线，见[文章完整落地报告](benchmarks/reports/2026-10-17-article-completion.md)。大单专用路径（文章未涉及）未做。
+- [x] 补齐剩余验证项：HTTP 层测试、计划 6.2 中此前未覆盖的维度，见[补齐报告](benchmarks/reports/2026-10-18-remaining.md)。单位池并非在所有负载下都更快：流量均匀分散时单计数器快约 9%，有热点时单位池反超。
 - [x] 修复验证中发现的问题：到期清理改为 SKIP LOCKED 批量领取、读副本延迟保护、批量预留成员隔离、Flyway 升级、测试库清理，见[修复报告](benchmarks/reports/2026-10-18-fixes.md)。
 
 尚未验证的部分：独立数据库服务器上的性能（所有压测中 MySQL 与应用、k6 同机）、生产规模的性能、大单专用路径（文章未涉及）。
