@@ -39,7 +39,15 @@ public record StockholdProperties(
 
     public record Expiry(
             @DefaultValue("true") boolean jobEnabled,
-            @DefaultValue("200") int batchSize) {
+            // scan 模式每轮最多处理的候选数。
+            @DefaultValue("200") int batchSize,
+            // skip-locked：工作线程用 SKIP LOCKED 领取到期预留，多线程 / 多实例自然分摊；scan：逐个扫描候选（原实现）。
+            @DefaultValue("skip-locked") String mode,
+            @DefaultValue("2") int workers,
+            // 每轮最多持续多久；有积压时一轮内持续清理，不再每处理一页就等下一轮。
+            @DefaultValue("1000") long drainBudgetMillis,
+            // skip-locked 模式下一个事务领取的到期预留数；1 即逐个释放。
+            @DefaultValue("50") int claimBatchSize) {
     }
 
     public record Admin(

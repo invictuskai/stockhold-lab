@@ -7,11 +7,13 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import lab.inventory.domain.CanonicalReservationRequest;
+import lab.inventory.domain.InventoryKey;
 import lab.inventory.domain.Reservation;
 import lab.inventory.domain.ReservationStatus;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,6 +34,9 @@ public class ReservationRepository {
             + " expires_at, claimed_at, cancelled_at, expired_at, created_at";
 
     public record ExpiryCandidate(long shopId, UUID reservationId, Instant expiresAt) {
+    }
+
+    public record KeyedLine(InventoryKey key, int quantity) {
     }
 
     private final JdbcTemplate jdbc;
@@ -84,6 +89,56 @@ public class ReservationRepository {
     public Optional<Reservation.Header> lockHeader(long shopId, UUID reservationId) {
         return queryHeader(" WHERE shop_id = ? AND reservation_id = ? FOR UPDATE",
                 shopId, Codec.uuidToBytes(reservationId));
+    }
+
+    /**
+     * 领取一个到期的 ACTIVE 预留并锁住它的头：别的事务正持有的头（另一个到期工作线程 / 实例，或正在确认、取消）
+     * 直接跳过而不等待。只锁一个头，锁序与确认 / 取消相同（头 → 账本）。
+     */
+    public Optional<Reservation.Header> lockNextDue() {
+        return lockDueBatch(1).stream().findFirst();
+    }
+
+    /**
+     * 一次领取最多 limit 个到期 ACTIVE 预留并锁住它们的头；正被别的事务持有的头直接跳过。
+     * 因为跳过而不等待，持有多个头不会参与任何等待环，见总体技术方案 7.8。
+     */
+    public List<Reservation.Header> lockDueBatch(int limit) {
+        return jdbc.query(tag("SELECT " + HEADER_COLUMNS + " FROM " + headers
+                + " WHERE status = 'ACTIVE' AND expires_at <= UTC_TIMESTAMP(6)"
+                + " ORDER BY expires_at LIMIT ? FOR UPDATE SKIP LOCKED"), ReservationRepository::mapHeader, limit);
+    }
+
+    /** 一组预留的全部明细（店铺、维度、数量），供批量释放按维度汇总。 */
+    public List<KeyedLine> findLinesOf(List<Reservation.Header> reservations) {
+        if (reservations.isEmpty()) {
+            return List.of();
+        }
+        StringBuilder sql = new StringBuilder("SELECT shop_id, inventory_item_id, location_id, quantity FROM ")
+                .append(lines).append(" WHERE (shop_id, reservation_id) IN (");
+        List<Object> args = new ArrayList<>(reservations.size() * 2);
+        for (int i = 0; i < reservations.size(); i++) {
+            sql.append(i == 0 ? "(?, ?)" : ", (?, ?)");
+            args.add(reservations.get(i).shopId());
+            args.add(Codec.uuidToBytes(reservations.get(i).reservationId()));
+        }
+        sql.append(')');
+        return jdbc.query(tag(sql.toString()), (rs, i) -> new KeyedLine(
+                new InventoryKey(rs.getLong(1), rs.getLong(2), rs.getLong(3)), rs.getInt(4)), args.toArray());
+    }
+
+    /** 最早一个已到期仍为 ACTIVE 的到期时间；没有积压时为空。只读，走 idx_reservation_expiry。 */
+    public Optional<Instant> oldestOverdue() {
+        return Optional.ofNullable(jdbc.query(tag("SELECT MIN(expires_at) AS expires_at FROM " + headers
+                + " WHERE status = 'ACTIVE' AND expires_at <= UTC_TIMESTAMP(6)"),
+                rs -> rs.next() && rs.getObject(1) != null ? Codec.instant(rs, "expires_at") : null));
+    }
+
+    /** 已到期仍为 ACTIVE 的数量，最多数到 cap。 */
+    public long overdueCount(int cap) {
+        Long count = jdbc.queryForObject(tag("SELECT COUNT(*) FROM (SELECT 1 FROM " + headers
+                + " WHERE status = 'ACTIVE' AND expires_at <= UTC_TIMESTAMP(6) LIMIT ?) due"), Long.class, cap);
+        return count == null ? 0 : count;
     }
 
     public Optional<Reservation.Header> findHeader(long shopId, UUID reservationId) {

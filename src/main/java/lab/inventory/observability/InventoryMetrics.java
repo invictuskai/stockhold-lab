@@ -56,6 +56,13 @@ public class InventoryMetrics {
         counter("stockhold.reserve.retries", "reason", reason).increment();
     }
 
+    /** 到期释放的预留数（批量释放时一次操作对应多个预留）。 */
+    public void expiryReleased(int count) {
+        if (count > 0) {
+            counter("stockhold.expiry.released").increment(count);
+        }
+    }
+
     /** 候选地点无法履约、改用下一个候选的次数。 */
     public void fulfillmentFallback() {
         counter("stockhold.reserve.fulfillment.fallback").increment();

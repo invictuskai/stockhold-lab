@@ -3,6 +3,8 @@ package lab.inventory.application;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 
 import lab.inventory.config.StockholdProperties;
@@ -209,6 +211,55 @@ public class ReservationTransactionService {
                 throw new IllegalStateException("Reservation header changed while its row lock was held");
             }
             return true;
+        });
+    }
+
+    /**
+     * 领取并释放下一个到期预留（SKIP LOCKED 抢任务，见 {@link ReservationRepository#lockNextDue}）。
+     *
+     * @return true 表示释放了一个；false 表示没有可领取的到期预留（没有积压，或剩下的正被别的事务持有）
+     */
+    public boolean expireNextDue() {
+        return expireDueBatch(1) > 0;
+    }
+
+    /**
+     * 一个事务领取并释放最多 limit 个到期预留：SKIP LOCKED 锁住它们的头（不等待），标记为 EXPIRED，
+     * 按维度汇总数量后按 InventoryKey 升序每个维度只更新一次账本。热点账本行上的更新次数从
+     * “每个预留一次”降为“每批每维度一次”，且账本行最后修改，持锁时间最短。
+     *
+     * @return 本次释放的预留数；0 表示没有可领取的到期预留
+     */
+    public int expireDueBatch(int limit) {
+        return transactions.execute(BusinessOperation.EXPIRY, () -> {
+            List<Reservation.Header> due = reservations.lockDueBatch(limit);
+            if (due.isEmpty()) {
+                return 0;
+            }
+            // 与 claim 相同的规则：确实获得头锁之后再采样数据库时间并复查。
+            Instant now = reservations.databaseNow();
+            List<Reservation.Header> expiring = due.stream().filter(h -> !h.expiresAt().isAfter(now)).toList();
+            if (expiring.isEmpty()) {
+                return 0;
+            }
+            Map<InventoryKey, Long> totals = new TreeMap<>();
+            for (ReservationRepository.KeyedLine line : reservations.findLinesOf(expiring)) {
+                totals.merge(line.key(), (long) line.quantity(), Long::sum);
+            }
+            // 最热的行最后改：头已经锁在手里，先改头的状态；热点账本行放到最后、紧挨着提交，
+            // 让确认 / 取消在账本行上等待的时间最短。加锁顺序仍是“头 → 账本”。
+            for (Reservation.Header header : expiring) {
+                if (reservations.markExpired(header.shopId(), header.reservationId(), now) != 1) {
+                    throw new IllegalStateException("Reservation header changed while its row lock was held");
+                }
+            }
+            for (Map.Entry<InventoryKey, Long> total : totals.entrySet()) {
+                if (ledgers.release(total.getKey(), total.getValue()) != 1) {
+                    throw violation("Ledger allocation is smaller than the expired reservations.", total.getKey());
+                }
+            }
+            faults.at(FaultInjector.Point.RELEASE_AFTER_LEDGER_UPDATE);
+            return expiring.size();
         });
     }
 
