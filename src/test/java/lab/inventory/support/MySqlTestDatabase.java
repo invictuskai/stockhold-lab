@@ -1,5 +1,12 @@
 package lab.inventory.support;
 
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.extension.ConditionEvaluationResult;
@@ -48,6 +55,7 @@ public final class MySqlTestDatabase implements ExecutionCondition {
                 observer = new Coordinates(observerUrl(coordinates.url()), observerUser,
                         System.getenv().getOrDefault("STOCKHOLD_TEST_OBSERVER_PASSWORD", ""));
             }
+            resetIsolatedDatabase(coordinates);
             return coordinates;
         }
         boolean docker;
@@ -69,6 +77,35 @@ public final class MySqlTestDatabase implements ExecutionCondition {
                 container.getPassword());
         observer = new Coordinates(observerUrl(coordinates.url()), "root", container.getPassword());
         return coordinates;
+    }
+
+    /**
+     * 环境变量指向的是“可随时重置的隔离库”：每次测试 JVM 启动时清空一次，避免历次运行的残留
+     * （例如早已过期的 ACTIVE 预留）拖慢全局扫描类测试。为防误指向业务库，只处理库名以 _test 结尾的库；
+     * Flyway 的历史表保留，表结构不变。
+     */
+    private static void resetIsolatedDatabase(Coordinates db) {
+        try (Connection connection = DriverManager.getConnection(db.url(), db.username(), db.password());
+                Statement statement = connection.createStatement()) {
+            String schema = connection.getCatalog();
+            if (schema == null || !schema.endsWith("_test")) {
+                throw new IllegalStateException("Refusing to reset database '" + schema
+                        + "': STOCKHOLD_TEST_JDBC_URL must point at an isolated *_test database");
+            }
+            List<String> tables = new ArrayList<>();
+            try (ResultSet rs = statement.executeQuery("SELECT table_name FROM information_schema.tables"
+                    + " WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'"
+                    + " AND table_name <> 'flyway_schema_history'")) {
+                while (rs.next()) {
+                    tables.add(rs.getString(1));
+                }
+            }
+            for (String table : tables) {
+                statement.execute("TRUNCATE TABLE `" + table + "`");
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not reset the isolated test database", e);
+        }
     }
 
     /** 观察账号不需要业务库权限：默认库换成 performance_schema。 */

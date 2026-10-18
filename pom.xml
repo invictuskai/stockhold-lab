@@ -22,6 +22,8 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <springdoc.version>2.8.17</springdoc.version>
+        <!-- Boot 3.5 默认的 Flyway 11.7 会警告“未在 MySQL 8.4 上测试”；同一大版本内升级到声明支持 8.4 的版本。 -->
+        <flyway.version>11.20.3</flyway.version>
     </properties>
 
     <dependencies>
