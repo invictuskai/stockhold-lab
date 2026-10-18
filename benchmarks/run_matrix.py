@@ -114,6 +114,28 @@ def experiments():
                                                         ('separate-neighbors-with-pool', 'pool', 100),
                                                         ('separate-neighbors-with-counter', 'counter', 100))]))
 
+    # E13b：读副本的延迟保护。副本新鲜时由副本服务；应用线程停住、延迟持续增长时全部回落主库，不出现 404。
+    for stalled in (False, True):
+        groups.append(dict(id='E13b', title='读副本的延迟保护：副本新鲜 vs 副本停滞',
+                           app_env={'STOCKHOLD_REPLICA_DB_URL': '${REPLICA_URL}'}, wait_replica=True,
+                           stall_replica=stalled,
+                           configs=[dict(name=f'read-mix-eventual-{"stalled" if stalled else "fresh"}',
+                                         script='read-mix.js', mode='pool', items=10, capacity=1000,
+                                         k6=dict(VUS=50, ITEM_COUNT=10, CART_DIMENSIONS=1, QUANTITY=1, READS=4,
+                                                 CONSISTENCY='eventual'))]))
+
+    # E17：到期清理。两个实例，60% 的预留等待到期（TTL 5 秒）；原实现（逐个扫描、每秒一轮）vs SKIP LOCKED 工作线程。
+    for mode, env_overrides in (('scan', {'STOCKHOLD_EXPIRY_MODE': 'scan', 'STOCKHOLD_EXPIRY_INTERVAL_MILLIS': '1000'}),
+                                ('skip-locked-single', {'STOCKHOLD_EXPIRY_CLAIM_BATCH_SIZE': '1'}),
+                                ('skip-locked-batch50', {'STOCKHOLD_EXPIRY_CLAIM_BATCH_SIZE': '50'})):
+        groups.append(dict(id='E17', title='到期清理：逐个扫描 vs SKIP LOCKED 逐个领取 vs SKIP LOCKED 批量领取',
+                           app_env=env_overrides,
+                           instances=2, measure_expiry=True,
+                           configs=[dict(name=f'expiry-{mode}', script='lifecycle.js', mode='pool', items=10,
+                                         capacity=1000,
+                                         k6=dict(VUS=50, ITEM_COUNT=10, CART_DIMENSIONS=1, QUANTITY=1, TTL_SECONDS=5,
+                                                 CLAIM_SHARE=0.3, CANCEL_SHARE=0.1))]))
+
     # E16：补充期间等待的预留在池补满后立即继续（文章第 25 条）。同一批次内对照：退避（旧行为）vs 立即重试。
     for immediate in ('false', 'true'):
         groups.append(dict(id='E16', title='池补满即继续：退避 vs 立即重试',
@@ -323,9 +345,10 @@ def delta(after, before):
 class Sampler(threading.Thread):
     """测量窗口内约每 2 秒采样一次 Hikari pending、应用 CPU、MySQL Threads_running 与容器 CPU。"""
 
-    def __init__(self, replica=False):
+    def __init__(self, replica=False, overdue=False):
         super().__init__(daemon=True)
         self.replica = replica
+        self.overdue = overdue
         self.stop = threading.Event()
         self.samples = []
         self.container = subprocess.run(compose_cmd() + ['ps', '-q', 'mysql'], capture_output=True, text=True,
@@ -352,6 +375,8 @@ class Sampler(threading.Thread):
                 sample['mysql_container_cpu_percent'] = float(stats.strip().rstrip('%') or 0)
                 if self.replica:
                     sample['replica_lag_seconds'] = replica_lag_seconds()
+                if self.overdue:
+                    sample['overdue_active'] = float(mysql(OVERDUE_SQL)[0][0])
             except Exception as e:  # 采样失败不影响测量本身
                 sample['error'] = str(e)
             self.samples.append(sample)
@@ -360,7 +385,7 @@ class Sampler(threading.Thread):
     def summary(self):
         result = {}
         for key in ('hikari_pending', 'hikari_active', 'app_process_cpu', 'host_system_cpu', 'threads_running',
-                    'mysql_container_cpu_percent', 'replica_lag_seconds'):
+                    'mysql_container_cpu_percent', 'replica_lag_seconds', 'overdue_active'):
             values = [s[key] for s in self.samples if s.get(key) is not None]
             if values:
                 result[key] = dict(avg=round(sum(values) / len(values), 3), max=round(max(values), 3),
@@ -407,6 +432,20 @@ def wait_for_replica(timeout_seconds=600):
     return round(time.time() - started, 1)
 
 
+OVERDUE_SQL = ("SELECT COUNT(*) FROM reservations WHERE status = 'ACTIVE'"
+               " AND expires_at <= UTC_TIMESTAMP(6);")
+
+
+def drain_seconds(timeout_seconds=300):
+    """负载停止后，已到期仍为 ACTIVE 的积压清零所需的秒数；超时返回 None。"""
+    started = time.time()
+    while time.time() - started < timeout_seconds:
+        if mysql(OVERDUE_SQL)[0][0] == '0':
+            return round(time.time() - started, 1)
+        time.sleep(1)
+    return None
+
+
 def replica_lag_seconds():
     for line in subprocess.run(compose_cmd() + ['exec', '-T', 'mysql-replica', 'sh', '-c',
                                                 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -e "SHOW REPLICA STATUS\\G"'],
@@ -417,40 +456,83 @@ def replica_lag_seconds():
     return None
 
 
+class Phases:
+    """记录一次运行各阶段的耗时（秒），便于定位运行为什么变慢。"""
+
+    def __init__(self):
+        self.seconds = {}
+        self.mark = time.time()
+
+    def done(self, name):
+        now = time.time()
+        self.seconds[name] = round(now - self.mark, 1)
+        self.mark = now
+
+
 def run_once(group, config, rep, env, args, out_dir, on_hand, hooks=None):
     """hooks 可选：start() 在测量窗口开始前调用，stop() 在结束后调用并返回附加到结果中的字典。"""
+    phases = Phases()
     reset_tables()
+    phases.done('reset')
     seed(config, env, on_hand)
+    phases.done('seed')
     initial = audit(config, env, on_hand)
+    phases.done('initial_audit')
     if not initial['valid']:
         # 起点不干净的运行不记录：它测到的是清库残留，而不是被测系统。
         raise RuntimeError(f'audit failed right after seeding: {initial}')
     scratch = out_dir / 'scratch'
     scratch.mkdir(exist_ok=True)
     replica_wait = wait_for_replica() if group.get('wait_replica') else None
+    phases.done('replica_wait')
+    if group.get('stall_replica'):
+        # 停住副本的应用线程：复制延迟在测量窗口内持续增长，用来检验读副本的延迟保护。
+        replica_sql('STOP REPLICA SQL_THREAD;')
     warm_code, warm_log = k6(config, env, args.warmup, scratch / 'warmup.json')
+    phases.done('warmup')
     prom_before, db_before = prometheus(), mysql_counters()
-    sampler = Sampler(replica=bool(group.get('wait_replica')))
+    sampler = Sampler(replica=bool(group.get('wait_replica')), overdue=bool(group.get('measure_expiry')))
     sampler.start()
     if hooks:
         hooks.start()
     started = time.time()
     code, log = k6(config, env, args.duration, scratch / 'measure.json')
     elapsed = time.time() - started
+    phases.done('measure')
+    # 测量窗口被拉长（例如系统睡眠、进程被冻结）时，按秒计算的速率都不可信。
+    suspect = elapsed > float(args.duration.rstrip('s')) + 45
+    if suspect:
+        print(f'    WARNING: k6 took {elapsed:.0f}s for a {args.duration} window; this run is unreliable', flush=True)
     extra = hooks.stop() if hooks else {}
     sampler.stop.set()
     sampler.join(15)
     prom_after, db_after = prometheus(), mysql_counters()
+    phases.done('samplers')
+    drained = drain_seconds() if group.get('measure_expiry') else None
+    phases.done('drain_wait')
+    if group.get('stall_replica'):
+        replica_sql('START REPLICA SQL_THREAD;')
+    final_audit = audit(config, env, on_hand)
+    phases.done('final_audit')
     return dict(
+        expiry_drain_after_stop_s=drained, suspect_timing=suspect,
         group=group['id'], title=group['title'], config=config['name'], rep=rep, app_env=group['app_env'],
         instances=len(PORTS),
         k6_env=config['k6'], mode=config['mode'], script=config['script'], items=config['items'],
         capacity=config['capacity'], seed_on_hand=on_hand, duration=args.duration, wall_seconds=round(elapsed, 1),
         k6_exit=code, warmup_exit=warm_code, k6=k6_metrics(scratch / 'measure.json'),
         app_metrics_delta=delta(prom_after, prom_before), mysql_delta=delta(db_after, db_before),
-        samples=sampler.summary(), audit=audit(config, env, on_hand), extra=extra,
+        samples=sampler.summary(), audit=final_audit, extra=extra, phase_seconds=phases.seconds,
         replica_catch_up_wait_s=replica_wait,
         k6_log_tail=log if code != 0 else '')
+
+
+def keep_awake():
+    """macOS 上在本进程存活期间阻止系统睡眠：睡眠会冻结虚拟机、JVM 与 k6，把墙钟时间拉长数十倍，
+    曾让一整夜的测量全部失效。caffeinate -w 在本进程退出时自动释放。"""
+    if sys.platform == 'darwin' and shutil.which('caffeinate'):
+        subprocess.Popen(['caffeinate', '-dims', '-w', str(os.getpid())],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def environment(env):
@@ -480,6 +562,7 @@ def main():
     parser.add_argument('--duration', default='60s')
     parser.add_argument('--on-hand', type=int, default=10_000_000, help='每个维度的初始库存，保证测量窗口内不耗尽')
     args = parser.parse_args()
+    keep_awake()
 
     env = load_env()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -509,7 +592,11 @@ def apply_mysql_globals(settings):
 
 
 def run_group(group, env, overrides, args):
-    with App(env, overrides, args.out / 'scratch', group['id'], group.get('instances', 1)):
+    logs = args.out / 'app-logs'
+    logs.mkdir(exist_ok=True)
+    started = time.time()
+    with App(env, overrides, logs, group['id'], group.get('instances', 1)):
+        print(f"    app start {time.time() - started:.1f}s", flush=True)
         for config in group['configs']:
             for rep in range(1, args.reps + 1):
                 target = args.out / f"{group['id']}-{config['name']}-r{rep}.json"
@@ -519,7 +606,9 @@ def run_group(group, env, overrides, args):
                 target.write_text(json.dumps(result, ensure_ascii=False, indent=2))
                 reserve = result['k6'].get('reserve_created', {})
                 print(f"    created/s={reserve.get('rate', 0):.1f} audit_valid={result['audit']['valid']}"
-                      f" k6_exit={result['k6_exit']}", flush=True)
+                      f" k6_exit={result['k6_exit']} phases={result['phase_seconds']}", flush=True)
+        stopping = time.time()
+    print(f"    app stop {time.time() - stopping:.1f}s", flush=True)
 
 
 if __name__ == '__main__':

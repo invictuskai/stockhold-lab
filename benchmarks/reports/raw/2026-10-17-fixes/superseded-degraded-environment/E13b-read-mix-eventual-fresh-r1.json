@@ -1,0 +1,363 @@
+{
+  "expiry_drain_after_stop_s": null,
+  "group": "E13b",
+  "title": "读副本的延迟保护：副本新鲜 vs 副本停滞",
+  "config": "read-mix-eventual-fresh",
+  "rep": 1,
+  "app_env": {
+    "STOCKHOLD_REPLICA_DB_URL": "${REPLICA_URL}"
+  },
+  "instances": 1,
+  "k6_env": {
+    "VUS": 50,
+    "ITEM_COUNT": 10,
+    "CART_DIMENSIONS": 1,
+    "QUANTITY": 1,
+    "READS": 4,
+    "CONSISTENCY": "eventual"
+  },
+  "mode": "pool",
+  "script": "read-mix.js",
+  "items": 10,
+  "capacity": 1000,
+  "seed_on_hand": 10000000,
+  "duration": "60s",
+  "wall_seconds": 61.9,
+  "k6_exit": 0,
+  "warmup_exit": 0,
+  "k6": {
+    "iteration_duration": {
+      "med": 245.486916,
+      "p(95)": 396.923708,
+      "p(99)": 473.1754706,
+      "max": 788.193417,
+      "avg": 253.1700708294196
+    },
+    "http_req_sending": {
+      "p(99)": 0.025,
+      "max": 1.101,
+      "avg": 0.00840309080277174,
+      "med": 0.008,
+      "p(95)": 0.015
+    },
+    "vus": {
+      "value": 50,
+      "min": 49,
+      "max": 50
+    },
+    "http_reqs{op:reserve}": {
+      "count": 11971,
+      "rate": 195.6780599485588
+    },
+    "http_req_duration{op:cancel}": {
+      "avg": 0,
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0
+    },
+    "http_req_receiving": {
+      "avg": 0.03137495614401274,
+      "med": 0.026,
+      "p(95)": 0.061,
+      "p(99)": 0.107,
+      "max": 9.998
+    },
+    "reserve_created": {
+      "rate": 195.6780599485588,
+      "count": 11971
+    },
+    "read_ok": {
+      "count": 47884,
+      "rate": 782.7122397942352
+    },
+    "iterations": {
+      "count": 11971,
+      "rate": 195.6780599485588
+    },
+    "http_req_duration{op:reserve}": {
+      "med": 8.226,
+      "p(95)": 19.032,
+      "p(99)": 29.95319999999999,
+      "max": 80.921,
+      "avg": 9.624211845292788
+    },
+    "http_req_duration{expected_response:true}": {
+      "p(99)": 158.55671999999998,
+      "max": 444.461,
+      "avg": 50.556902146854625,
+      "med": 50.602,
+      "p(95)": 110.6202
+    },
+    "http_req_duration": {
+      "avg": 50.556902146854625,
+      "med": 50.602,
+      "p(95)": 110.6202,
+      "p(99)": 158.55671999999998,
+      "max": 444.461
+    },
+    "http_req_tls_handshaking": {
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0,
+      "avg": 0
+    },
+    "http_req_duration{op:read}": {
+      "max": 444.461,
+      "avg": 60.790074722245144,
+      "med": 57.669,
+      "p(95)": 117.9878,
+      "p(99)": 165.01706000000001
+    },
+    "http_req_duration{op:claim}": {
+      "avg": 0,
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0
+    },
+    "http_req_failed": {
+      "passes": 0,
+      "fails": 59855,
+      "value": 0
+    },
+    "http_req_waiting": {
+      "p(95)": 110.55969999999998,
+      "p(99)": 158.5005,
+      "max": 444.434,
+      "avg": 50.517124099907974,
+      "med": 50.566
+    },
+    "http_reqs": {
+      "count": 59855,
+      "rate": 978.3902997427939
+    },
+    "http_req_connecting": {
+      "avg": 0.002363528527274248,
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0.12345999999999947,
+      "max": 4.034
+    },
+    "data_received": {
+      "count": 31234083,
+      "rate": 510552.5658434768
+    },
+    "vus_max": {
+      "value": 50,
+      "min": 50,
+      "max": 50
+    },
+    "http_req_blocked": {
+      "avg": 0.005022821819396378,
+      "med": 0.002,
+      "p(95)": 0.005,
+      "p(99)": 0.14891999999999894,
+      "max": 8.011
+    },
+    "read_from_replica": {
+      "count": 47853,
+      "rate": 782.2055135509468
+    },
+    "data_sent": {
+      "count": 9940167,
+      "rate": 162482.04779255582
+    }
+  },
+  "app_metrics_delta": {
+    "hikaricp_connections_acquire_seconds_count{pool=\"stockhold\"}": 13198.0,
+    "hikaricp_connections_acquire_seconds_sum{pool=\"stockhold\"}": 0.234,
+    "hikaricp_connections_usage_seconds_count{pool=\"stockhold\"}": 13198.0,
+    "hikaricp_connections_usage_seconds_sum{pool=\"stockhold\"}": 113.17,
+    "stockhold_connection_acquire_seconds_count{op=\"benchmark\"}": 59.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"benchmark\"}": 0.000555,
+    "stockhold_connection_acquire_seconds_count{op=\"expiry\"}": 940.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"expiry\"}": 0.011881,
+    "stockhold_connection_acquire_seconds_count{op=\"query\"}": 31.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"query\"}": 0.024696,
+    "stockhold_connection_acquire_seconds_count{op=\"refill\"}": 79.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"refill\"}": 0.001486,
+    "stockhold_connection_acquire_seconds_count{op=\"reserve\"}": 11971.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"reserve\"}": 0.379939,
+    "stockhold_connection_acquire_seconds_count{op=\"untagged\"}": 118.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"untagged\"}": 0.001686,
+    "stockhold_connection_hold_seconds_count{op=\"benchmark\"}": 59.0,
+    "stockhold_connection_hold_seconds_sum{op=\"benchmark\"}": 0.059808,
+    "stockhold_connection_hold_seconds_count{op=\"expiry\"}": 940.0,
+    "stockhold_connection_hold_seconds_sum{op=\"expiry\"}": 2.276973,
+    "stockhold_connection_hold_seconds_count{op=\"query\"}": 31.0,
+    "stockhold_connection_hold_seconds_sum{op=\"query\"}": 0.614979,
+    "stockhold_connection_hold_seconds_count{op=\"refill\"}": 79.0,
+    "stockhold_connection_hold_seconds_sum{op=\"refill\"}": 0.689432,
+    "stockhold_connection_hold_seconds_count{op=\"reserve\"}": 11971.0,
+    "stockhold_connection_hold_seconds_sum{op=\"reserve\"}": 109.167718,
+    "stockhold_connection_hold_seconds_count{op=\"untagged\"}": 118.0,
+    "stockhold_connection_hold_seconds_sum{op=\"untagged\"}": 0.317016,
+    "stockhold_operation_seconds_count{op=\"reserve\",outcome=\"created\"}": 11971.0,
+    "stockhold_operation_seconds_sum{op=\"reserve\",outcome=\"created\"}": 109.817966,
+    "stockhold_refill_units_count{trigger=\"background\"}": 20.0,
+    "stockhold_refill_units_sum{trigger=\"background\"}": 15257.0,
+    "stockhold_replica_reads_total{source=\"replica\"}": 47853.0,
+    "stockhold_sql_seconds_count{op=\"benchmark\"}": 59.0,
+    "stockhold_sql_seconds_sum{op=\"benchmark\"}": 0.056205,
+    "stockhold_sql_seconds_count{op=\"expiry\"}": 940.0,
+    "stockhold_sql_seconds_sum{op=\"expiry\"}": 0.818306,
+    "stockhold_sql_seconds_count{op=\"query\"}": 31.0,
+    "stockhold_sql_seconds_sum{op=\"query\"}": 0.611972,
+    "stockhold_sql_seconds_count{op=\"refill\"}": 279.0,
+    "stockhold_sql_seconds_sum{op=\"refill\"}": 0.505146,
+    "stockhold_sql_seconds_count{op=\"reserve\"}": 59855.0,
+    "stockhold_sql_seconds_sum{op=\"reserve\"}": 51.650006,
+    "stockhold_sql_seconds_count{op=\"untagged\"}": 118.0,
+    "stockhold_sql_seconds_sum{op=\"untagged\"}": 0.313738,
+    "stockhold_transaction_seconds_count{op=\"expiry\",result=\"commit\"}": 470.0,
+    "stockhold_transaction_seconds_sum{op=\"expiry\",result=\"commit\"}": 1.913775,
+    "stockhold_transaction_seconds_count{op=\"refill\",result=\"commit\"}": 20.0,
+    "stockhold_transaction_seconds_sum{op=\"refill\",result=\"commit\"}": 0.518779,
+    "stockhold_transaction_seconds_count{op=\"reserve\",result=\"commit\"}": 11971.0,
+    "stockhold_transaction_seconds_sum{op=\"reserve\",result=\"commit\"}": 109.62235
+  },
+  "mysql_delta": {
+    "Innodb_rows_deleted": 11971.0,
+    "Innodb_rows_inserted": 39199.0,
+    "Innodb_rows_updated": 137.0,
+    "Questions": 111221.0
+  },
+  "samples": {
+    "hikari_pending": {
+      "avg": 0.0,
+      "max": 0.0,
+      "samples": 20
+    },
+    "hikari_active": {
+      "avg": 2.05,
+      "max": 9.0,
+      "samples": 20
+    },
+    "app_process_cpu": {
+      "avg": 0.057,
+      "max": 0.117,
+      "samples": 20
+    },
+    "host_system_cpu": {
+      "avg": 0.563,
+      "max": 0.704,
+      "samples": 20
+    },
+    "threads_running": {
+      "avg": 3.25,
+      "max": 5.0,
+      "samples": 20
+    },
+    "mysql_container_cpu_percent": {
+      "avg": 27.42,
+      "max": 43.05,
+      "samples": 20
+    },
+    "replica_lag_seconds": {
+      "avg": 0.2,
+      "max": 1.0,
+      "samples": 20
+    }
+  },
+  "audit": {
+    "valid": true,
+    "dimensions": [
+      {
+        "item": 2001,
+        "valid": true,
+        "H": 10000000,
+        "A": 2531,
+        "P": 935,
+        "R": 1596,
+        "violations": []
+      },
+      {
+        "item": 2002,
+        "valid": true,
+        "H": 10000000,
+        "A": 2522,
+        "P": 850,
+        "R": 1672,
+        "violations": []
+      },
+      {
+        "item": 2003,
+        "valid": true,
+        "H": 10000000,
+        "A": 2534,
+        "P": 843,
+        "R": 1691,
+        "violations": []
+      },
+      {
+        "item": 2004,
+        "valid": true,
+        "H": 10000000,
+        "A": 2533,
+        "P": 869,
+        "R": 1664,
+        "violations": []
+      },
+      {
+        "item": 2005,
+        "valid": true,
+        "H": 10000000,
+        "A": 2526,
+        "P": 847,
+        "R": 1679,
+        "violations": []
+      },
+      {
+        "item": 2006,
+        "valid": true,
+        "H": 10000000,
+        "A": 2543,
+        "P": 836,
+        "R": 1707,
+        "violations": []
+      },
+      {
+        "item": 2007,
+        "valid": true,
+        "H": 10000000,
+        "A": 2534,
+        "P": 906,
+        "R": 1628,
+        "violations": []
+      },
+      {
+        "item": 2008,
+        "valid": true,
+        "H": 10000000,
+        "A": 2505,
+        "P": 827,
+        "R": 1678,
+        "violations": []
+      },
+      {
+        "item": 2009,
+        "valid": true,
+        "H": 10000000,
+        "A": 2517,
+        "P": 894,
+        "R": 1623,
+        "violations": []
+      },
+      {
+        "item": 2010,
+        "valid": true,
+        "H": 10000000,
+        "A": 2512,
+        "P": 860,
+        "R": 1652,
+        "violations": []
+      }
+    ]
+  },
+  "extra": {},
+  "replica_catch_up_wait_s": 0.1,
+  "k6_log_tail": "",
+  "mysql_globals": {}
+}

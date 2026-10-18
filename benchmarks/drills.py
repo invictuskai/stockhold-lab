@@ -495,6 +495,7 @@ def main():
     parser.add_argument('--warmup', default='10s')
     parser.add_argument('--duration', default='60s', help='proxysql 每次测量窗口')
     args = parser.parse_args()
+    rm.keep_awake()
     env = rm.load_env()
     (args.out / 'scratch').mkdir(parents=True, exist_ok=True)
     result = {'crash': crash, 'proxysql': proxysql, 'proxysql-exhaustion': proxysql_exhaustion,

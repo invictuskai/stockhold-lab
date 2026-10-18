@@ -76,7 +76,8 @@ def reserve_row(runs):
                           / max(app(r, 'stockhold_refill_units_count{trigger="sync"}'), 1) for r in runs], 0),
         retries=fmt([per_second(r, sum(v for k, v in r['app_metrics_delta'].items()
                                        if k.startswith('stockhold_reserve_retries_total'))) for r in runs], 1),
-        audit='全部通过' if all(r['audit']['valid'] for r in runs) else '**失败**',
+        audit=('全部通过' if all(r['audit']['valid'] for r in runs) else '**失败**')
+              + (' ⚠计时可疑' if any(r.get('suspect_timing') for r in runs) else ''),
         reps=len(runs))
 
 
@@ -180,6 +181,19 @@ def main():
             out.append(table(['配置', 'reserve 应用侧连接占用 s/s', 'reserve 代理后端占用 s/s',
                               '注入调用 应用侧 s/s', '注入调用 代理后端 s/s', '后端连接使用 平均', '后端连接使用 峰值'],
                              proxy))
+        if any(items[0].get('expiry_drain_after_stop_s') is not None or
+               metric(items[0], 'samples', 'overdue_active', 'avg', default=None) is not None for _, items in configs):
+            expiry_rows = []
+            for config, items in configs:
+                expiry_rows.append([config,
+                                    fmt([metric(r, 'samples', 'overdue_active', 'avg', default=None) for r in items], 0),
+                                    fmt([metric(r, 'samples', 'overdue_active', 'max', default=None) for r in items], 0),
+                                    fmt([r.get('expiry_drain_after_stop_s') for r in items], 1, ' s'),
+                                    fmt([per_second(r, app(r, 'stockhold_expiry_released_total')
+                                                    or app(r, 'stockhold_operation_seconds_count{op="expiry",outcome="released"}'))
+                                         for r in items], 0)])
+            out.append('')
+            out.append(table(['配置', '到期未清理 平均', '到期未清理 峰值', '停止后清零耗时', '到期释放/s'], expiry_rows))
         if any(items[0]['script'] == 'connection-hold.js' for _, items in configs):
             hold = []
             for config, items in configs:
