@@ -39,8 +39,30 @@ export function uniqueKey(prefix) {
   return `${prefix}-${__VU}-${__ITER}-${Date.now()}`;
 }
 
+// 商品分布：uniform（默认）或 zipf（排名为 r 的商品权重 1 / r^ZIPF_S，少数商品承接大部分流量）。
+const DISTRIBUTION = __ENV.DISTRIBUTION || 'uniform';
+const ZIPF_S = Number(__ENV.ZIPF_S || 1.0);
+const ZIPF_CUMULATIVE = (() => {
+  const weights = [];
+  for (let r = 1; r <= ITEM_COUNT; r++) {
+    weights.push(1 / Math.pow(r, ZIPF_S));
+  }
+  const total = weights.reduce((a, b) => a + b, 0);
+  let running = 0;
+  return weights.map((w) => (running += w / total));
+})();
+
+function firstItemIndex() {
+  if (DISTRIBUTION !== 'zipf') {
+    return Math.floor(Math.random() * ITEM_COUNT);
+  }
+  const roll = Math.random();
+  const index = ZIPF_CUMULATIVE.findIndex((c) => roll <= c);
+  return index < 0 ? ITEM_COUNT - 1 : index;
+}
+
 export function cartLines() {
-  const start = Math.floor(Math.random() * ITEM_COUNT);
+  const start = firstItemIndex();
   const lines = [];
   for (let i = 0; i < Math.min(CART_DIMENSIONS, ITEM_COUNT); i++) {
     lines.push({

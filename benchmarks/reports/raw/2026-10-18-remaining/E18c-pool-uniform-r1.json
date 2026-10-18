@@ -1,0 +1,1153 @@
+{
+  "expiry_drain_after_stop_s": null,
+  "suspect_timing": false,
+  "group": "E18c",
+  "title": "商品分布：100 个商品均匀 vs Zipf 倾斜",
+  "config": "pool-uniform",
+  "rep": 1,
+  "app_env": {},
+  "instances": 1,
+  "k6_env": {
+    "VUS": 100,
+    "ITEM_COUNT": 100,
+    "CART_DIMENSIONS": 1,
+    "QUANTITY": 1,
+    "DISTRIBUTION": "uniform"
+  },
+  "mode": "pool",
+  "script": "reserve-only.js",
+  "items": 100,
+  "capacity": 1000,
+  "seed_on_hand": 10000000,
+  "duration": "60s",
+  "wall_seconds": 62.1,
+  "k6_exit": 0,
+  "warmup_exit": 0,
+  "k6": {
+    "http_req_sending": {
+      "med": 0.007,
+      "p(95)": 0.014,
+      "p(99)": 0.02791999999999923,
+      "max": 1.915,
+      "avg": 0.007793035365838056
+    },
+    "reserve_other_errors": {
+      "count": 0,
+      "rate": 0
+    },
+    "http_req_failed": {
+      "passes": 0,
+      "fails": 86609,
+      "value": 0
+    },
+    "http_req_waiting": {
+      "max": 298.521,
+      "avg": 69.77934116546851,
+      "med": 66.037,
+      "p(95)": 107.1304,
+      "p(99)": 143.58344
+    },
+    "iterations": {
+      "count": 86609,
+      "rate": 1418.2057772059622
+    },
+    "vus": {
+      "value": 100,
+      "min": 98,
+      "max": 100
+    },
+    "http_req_duration{op:reserve}": {
+      "avg": 69.81378695054829,
+      "med": 66.071,
+      "p(95)": 107.1626,
+      "p(99)": 143.60852,
+      "max": 298.546
+    },
+    "http_reqs{op:reserve}": {
+      "count": 86609,
+      "rate": 1418.2057772059622
+    },
+    "http_req_duration{expected_response:true}": {
+      "avg": 69.81378695054829,
+      "med": 66.071,
+      "p(95)": 107.1626,
+      "p(99)": 143.60852,
+      "max": 298.546
+    },
+    "http_req_receiving": {
+      "p(95)": 0.059,
+      "p(99)": 0.086,
+      "max": 1.705,
+      "avg": 0.026652749714228447,
+      "med": 0.023
+    },
+    "reserve_created": {
+      "rate": 1418.2057772059622,
+      "count": 86609
+    },
+    "data_received": {
+      "count": 52500311,
+      "rate": 859682.5314379536
+    },
+    "http_req_blocked": {
+      "p(99)": 0.113,
+      "max": 0.489,
+      "avg": 0.0034897874354867723,
+      "med": 0.001,
+      "p(95)": 0.003
+    },
+    "data_sent": {
+      "count": 24145741,
+      "rate": 395381.88157257176
+    },
+    "http_req_duration{op:cancel}": {
+      "avg": 0,
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0
+    },
+    "http_req_duration": {
+      "avg": 69.81378695054829,
+      "med": 66.071,
+      "p(95)": 107.1626,
+      "p(99)": 143.60852,
+      "max": 298.546
+    },
+    "http_req_connecting": {
+      "avg": 0.0015958387696428796,
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0.093,
+      "max": 0.454
+    },
+    "http_req_tls_handshaking": {
+      "avg": 0,
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0
+    },
+    "http_req_duration{op:claim}": {
+      "p(99)": 0,
+      "max": 0,
+      "avg": 0,
+      "med": 0,
+      "p(95)": 0
+    },
+    "http_reqs": {
+      "count": 86609,
+      "rate": 1418.2057772059622
+    },
+    "vus_max": {
+      "value": 100,
+      "min": 100,
+      "max": 100
+    },
+    "iteration_duration": {
+      "p(95)": 107.22721599999998,
+      "p(99)": 143.67289935999997,
+      "max": 298.619167,
+      "avg": 69.8878549753608,
+      "med": 66.145834
+    }
+  },
+  "app_metrics_delta": {
+    "hikaricp_connections_acquire_seconds_count{pool=\"stockhold\"}": 87005.0,
+    "hikaricp_connections_acquire_seconds_sum{pool=\"stockhold\"}": 5076.382,
+    "hikaricp_connections_usage_seconds_count{pool=\"stockhold\"}": 87004.0,
+    "hikaricp_connections_usage_seconds_sum{pool=\"stockhold\"}": 973.595,
+    "stockhold_connection_acquire_seconds_count{op=\"benchmark\"}": 49.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"benchmark\"}": 3.109143,
+    "stockhold_connection_acquire_seconds_count{op=\"expiry\"}": 196.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"expiry\"}": 11.760589,
+    "stockhold_connection_acquire_seconds_count{op=\"refill\"}": 150.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"refill\"}": 8.349196,
+    "stockhold_connection_acquire_seconds_count{op=\"reserve\"}": 86609.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"reserve\"}": 5053.511322,
+    "stockhold_connection_hold_seconds_count{op=\"benchmark\"}": 49.0,
+    "stockhold_connection_hold_seconds_sum{op=\"benchmark\"}": 0.052196,
+    "stockhold_connection_hold_seconds_count{op=\"expiry\"}": 196.0,
+    "stockhold_connection_hold_seconds_sum{op=\"expiry\"}": 0.529405,
+    "stockhold_connection_hold_seconds_count{op=\"refill\"}": 149.0,
+    "stockhold_connection_hold_seconds_sum{op=\"refill\"}": 3.375337,
+    "stockhold_connection_hold_seconds_count{op=\"reserve\"}": 86609.0,
+    "stockhold_connection_hold_seconds_sum{op=\"reserve\"}": 970.025719,
+    "stockhold_operation_seconds_count{op=\"reserve\",outcome=\"created\"}": 86609.0,
+    "stockhold_operation_seconds_sum{op=\"reserve\",outcome=\"created\"}": 6024.693113,
+    "stockhold_refill_units_count{trigger=\"background\"}": 100.0,
+    "stockhold_refill_units_sum{trigger=\"background\"}": 77165.0,
+    "stockhold_sql_seconds_count{op=\"benchmark\"}": 49.0,
+    "stockhold_sql_seconds_sum{op=\"benchmark\"}": 0.049663,
+    "stockhold_sql_seconds_count{op=\"expiry\"}": 196.0,
+    "stockhold_sql_seconds_sum{op=\"expiry\"}": 0.189029,
+    "stockhold_sql_seconds_count{op=\"refill\"}": 1150.0,
+    "stockhold_sql_seconds_sum{op=\"refill\"}": 2.399217,
+    "stockhold_sql_seconds_count{op=\"reserve\"}": 433045.0,
+    "stockhold_sql_seconds_sum{op=\"reserve\"}": 441.303441,
+    "stockhold_transaction_seconds_count{op=\"expiry\",result=\"commit\"}": 98.0,
+    "stockhold_transaction_seconds_sum{op=\"expiry\",result=\"commit\"}": 6.312184,
+    "stockhold_transaction_seconds_count{op=\"refill\",result=\"commit\"}": 100.0,
+    "stockhold_transaction_seconds_sum{op=\"refill\",result=\"commit\"}": 8.172738,
+    "stockhold_transaction_seconds_count{op=\"reserve\",result=\"commit\"}": 86609.0,
+    "stockhold_transaction_seconds_sum{op=\"reserve\",result=\"commit\"}": 6023.955116
+  },
+  "mysql_delta": {
+    "Innodb_rows_deleted": 86609.0,
+    "Innodb_rows_inserted": 250383.0,
+    "Innodb_rows_updated": 100.0,
+    "Questions": 781766.0
+  },
+  "samples": {
+    "hikari_pending": {
+      "avg": 80.35,
+      "max": 86.0,
+      "samples": 20
+    },
+    "hikari_active": {
+      "avg": 15.2,
+      "max": 16.0,
+      "samples": 20
+    },
+    "app_process_cpu": {
+      "avg": 0.107,
+      "max": 0.167,
+      "samples": 20
+    },
+    "host_system_cpu": {
+      "avg": 0.656,
+      "max": 0.741,
+      "samples": 20
+    },
+    "threads_running": {
+      "avg": 7.65,
+      "max": 15.0,
+      "samples": 20
+    },
+    "mysql_container_cpu_percent": {
+      "avg": 140.326,
+      "max": 151.39,
+      "samples": 20
+    }
+  },
+  "audit": {
+    "valid": true,
+    "dimensions": [
+      {
+        "item": 2001,
+        "valid": true,
+        "H": 10000000,
+        "A": 1773,
+        "P": 787,
+        "R": 986,
+        "violations": []
+      },
+      {
+        "item": 2002,
+        "valid": true,
+        "H": 10000000,
+        "A": 1777,
+        "P": 812,
+        "R": 965,
+        "violations": []
+      },
+      {
+        "item": 2003,
+        "valid": true,
+        "H": 10000000,
+        "A": 1773,
+        "P": 752,
+        "R": 1021,
+        "violations": []
+      },
+      {
+        "item": 2004,
+        "valid": true,
+        "H": 10000000,
+        "A": 1781,
+        "P": 795,
+        "R": 986,
+        "violations": []
+      },
+      {
+        "item": 2005,
+        "valid": true,
+        "H": 10000000,
+        "A": 1761,
+        "P": 756,
+        "R": 1005,
+        "violations": []
+      },
+      {
+        "item": 2006,
+        "valid": true,
+        "H": 10000000,
+        "A": 1769,
+        "P": 711,
+        "R": 1058,
+        "violations": []
+      },
+      {
+        "item": 2007,
+        "valid": true,
+        "H": 10000000,
+        "A": 1761,
+        "P": 717,
+        "R": 1044,
+        "violations": []
+      },
+      {
+        "item": 2008,
+        "valid": true,
+        "H": 10000000,
+        "A": 1777,
+        "P": 757,
+        "R": 1020,
+        "violations": []
+      },
+      {
+        "item": 2009,
+        "valid": true,
+        "H": 10000000,
+        "A": 1755,
+        "P": 655,
+        "R": 1100,
+        "violations": []
+      },
+      {
+        "item": 2010,
+        "valid": true,
+        "H": 10000000,
+        "A": 1790,
+        "P": 784,
+        "R": 1006,
+        "violations": []
+      },
+      {
+        "item": 2011,
+        "valid": true,
+        "H": 10000000,
+        "A": 1775,
+        "P": 777,
+        "R": 998,
+        "violations": []
+      },
+      {
+        "item": 2012,
+        "valid": true,
+        "H": 10000000,
+        "A": 1778,
+        "P": 794,
+        "R": 984,
+        "violations": []
+      },
+      {
+        "item": 2013,
+        "valid": true,
+        "H": 10000000,
+        "A": 1770,
+        "P": 752,
+        "R": 1018,
+        "violations": []
+      },
+      {
+        "item": 2014,
+        "valid": true,
+        "H": 10000000,
+        "A": 1751,
+        "P": 713,
+        "R": 1038,
+        "violations": []
+      },
+      {
+        "item": 2015,
+        "valid": true,
+        "H": 10000000,
+        "A": 1757,
+        "P": 766,
+        "R": 991,
+        "violations": []
+      },
+      {
+        "item": 2016,
+        "valid": true,
+        "H": 10000000,
+        "A": 1762,
+        "P": 785,
+        "R": 977,
+        "violations": []
+      },
+      {
+        "item": 2017,
+        "valid": true,
+        "H": 10000000,
+        "A": 1783,
+        "P": 763,
+        "R": 1020,
+        "violations": []
+      },
+      {
+        "item": 2018,
+        "valid": true,
+        "H": 10000000,
+        "A": 1760,
+        "P": 777,
+        "R": 983,
+        "violations": []
+      },
+      {
+        "item": 2019,
+        "valid": true,
+        "H": 10000000,
+        "A": 1756,
+        "P": 723,
+        "R": 1033,
+        "violations": []
+      },
+      {
+        "item": 2020,
+        "valid": true,
+        "H": 10000000,
+        "A": 1761,
+        "P": 734,
+        "R": 1027,
+        "violations": []
+      },
+      {
+        "item": 2021,
+        "valid": true,
+        "H": 10000000,
+        "A": 1752,
+        "P": 756,
+        "R": 996,
+        "violations": []
+      },
+      {
+        "item": 2022,
+        "valid": true,
+        "H": 10000000,
+        "A": 1764,
+        "P": 762,
+        "R": 1002,
+        "violations": []
+      },
+      {
+        "item": 2023,
+        "valid": true,
+        "H": 10000000,
+        "A": 1768,
+        "P": 747,
+        "R": 1021,
+        "violations": []
+      },
+      {
+        "item": 2024,
+        "valid": true,
+        "H": 10000000,
+        "A": 1762,
+        "P": 758,
+        "R": 1004,
+        "violations": []
+      },
+      {
+        "item": 2025,
+        "valid": true,
+        "H": 10000000,
+        "A": 1781,
+        "P": 760,
+        "R": 1021,
+        "violations": []
+      },
+      {
+        "item": 2026,
+        "valid": true,
+        "H": 10000000,
+        "A": 1761,
+        "P": 764,
+        "R": 997,
+        "violations": []
+      },
+      {
+        "item": 2027,
+        "valid": true,
+        "H": 10000000,
+        "A": 1765,
+        "P": 797,
+        "R": 968,
+        "violations": []
+      },
+      {
+        "item": 2028,
+        "valid": true,
+        "H": 10000000,
+        "A": 1775,
+        "P": 783,
+        "R": 992,
+        "violations": []
+      },
+      {
+        "item": 2029,
+        "valid": true,
+        "H": 10000000,
+        "A": 1798,
+        "P": 804,
+        "R": 994,
+        "violations": []
+      },
+      {
+        "item": 2030,
+        "valid": true,
+        "H": 10000000,
+        "A": 1759,
+        "P": 709,
+        "R": 1050,
+        "violations": []
+      },
+      {
+        "item": 2031,
+        "valid": true,
+        "H": 10000000,
+        "A": 1767,
+        "P": 725,
+        "R": 1042,
+        "violations": []
+      },
+      {
+        "item": 2032,
+        "valid": true,
+        "H": 10000000,
+        "A": 1776,
+        "P": 765,
+        "R": 1011,
+        "violations": []
+      },
+      {
+        "item": 2033,
+        "valid": true,
+        "H": 10000000,
+        "A": 1768,
+        "P": 724,
+        "R": 1044,
+        "violations": []
+      },
+      {
+        "item": 2034,
+        "valid": true,
+        "H": 10000000,
+        "A": 1767,
+        "P": 680,
+        "R": 1087,
+        "violations": []
+      },
+      {
+        "item": 2035,
+        "valid": true,
+        "H": 10000000,
+        "A": 1758,
+        "P": 704,
+        "R": 1054,
+        "violations": []
+      },
+      {
+        "item": 2036,
+        "valid": true,
+        "H": 10000000,
+        "A": 1760,
+        "P": 795,
+        "R": 965,
+        "violations": []
+      },
+      {
+        "item": 2037,
+        "valid": true,
+        "H": 10000000,
+        "A": 1771,
+        "P": 777,
+        "R": 994,
+        "violations": []
+      },
+      {
+        "item": 2038,
+        "valid": true,
+        "H": 10000000,
+        "A": 1770,
+        "P": 711,
+        "R": 1059,
+        "violations": []
+      },
+      {
+        "item": 2039,
+        "valid": true,
+        "H": 10000000,
+        "A": 1754,
+        "P": 664,
+        "R": 1090,
+        "violations": []
+      },
+      {
+        "item": 2040,
+        "valid": true,
+        "H": 10000000,
+        "A": 1769,
+        "P": 787,
+        "R": 982,
+        "violations": []
+      },
+      {
+        "item": 2041,
+        "valid": true,
+        "H": 10000000,
+        "A": 1784,
+        "P": 758,
+        "R": 1026,
+        "violations": []
+      },
+      {
+        "item": 2042,
+        "valid": true,
+        "H": 10000000,
+        "A": 1793,
+        "P": 820,
+        "R": 973,
+        "violations": []
+      },
+      {
+        "item": 2043,
+        "valid": true,
+        "H": 10000000,
+        "A": 1768,
+        "P": 750,
+        "R": 1018,
+        "violations": []
+      },
+      {
+        "item": 2044,
+        "valid": true,
+        "H": 10000000,
+        "A": 1787,
+        "P": 755,
+        "R": 1032,
+        "violations": []
+      },
+      {
+        "item": 2045,
+        "valid": true,
+        "H": 10000000,
+        "A": 1763,
+        "P": 725,
+        "R": 1038,
+        "violations": []
+      },
+      {
+        "item": 2046,
+        "valid": true,
+        "H": 10000000,
+        "A": 1769,
+        "P": 739,
+        "R": 1030,
+        "violations": []
+      },
+      {
+        "item": 2047,
+        "valid": true,
+        "H": 10000000,
+        "A": 1766,
+        "P": 698,
+        "R": 1068,
+        "violations": []
+      },
+      {
+        "item": 2048,
+        "valid": true,
+        "H": 10000000,
+        "A": 1771,
+        "P": 794,
+        "R": 977,
+        "violations": []
+      },
+      {
+        "item": 2049,
+        "valid": true,
+        "H": 10000000,
+        "A": 1771,
+        "P": 733,
+        "R": 1038,
+        "violations": []
+      },
+      {
+        "item": 2050,
+        "valid": true,
+        "H": 10000000,
+        "A": 1783,
+        "P": 790,
+        "R": 993,
+        "violations": []
+      },
+      {
+        "item": 2051,
+        "valid": true,
+        "H": 10000000,
+        "A": 1758,
+        "P": 803,
+        "R": 955,
+        "violations": []
+      },
+      {
+        "item": 2052,
+        "valid": true,
+        "H": 10000000,
+        "A": 1764,
+        "P": 769,
+        "R": 995,
+        "violations": []
+      },
+      {
+        "item": 2053,
+        "valid": true,
+        "H": 10000000,
+        "A": 1783,
+        "P": 791,
+        "R": 992,
+        "violations": []
+      },
+      {
+        "item": 2054,
+        "valid": true,
+        "H": 10000000,
+        "A": 1763,
+        "P": 778,
+        "R": 985,
+        "violations": []
+      },
+      {
+        "item": 2055,
+        "valid": true,
+        "H": 10000000,
+        "A": 1771,
+        "P": 717,
+        "R": 1054,
+        "violations": []
+      },
+      {
+        "item": 2056,
+        "valid": true,
+        "H": 10000000,
+        "A": 1763,
+        "P": 722,
+        "R": 1041,
+        "violations": []
+      },
+      {
+        "item": 2057,
+        "valid": true,
+        "H": 10000000,
+        "A": 1768,
+        "P": 785,
+        "R": 983,
+        "violations": []
+      },
+      {
+        "item": 2058,
+        "valid": true,
+        "H": 10000000,
+        "A": 1752,
+        "P": 690,
+        "R": 1062,
+        "violations": []
+      },
+      {
+        "item": 2059,
+        "valid": true,
+        "H": 10000000,
+        "A": 1766,
+        "P": 755,
+        "R": 1011,
+        "violations": []
+      },
+      {
+        "item": 2060,
+        "valid": true,
+        "H": 10000000,
+        "A": 1758,
+        "P": 754,
+        "R": 1004,
+        "violations": []
+      },
+      {
+        "item": 2061,
+        "valid": true,
+        "H": 10000000,
+        "A": 1789,
+        "P": 798,
+        "R": 991,
+        "violations": []
+      },
+      {
+        "item": 2062,
+        "valid": true,
+        "H": 10000000,
+        "A": 1795,
+        "P": 784,
+        "R": 1011,
+        "violations": []
+      },
+      {
+        "item": 2063,
+        "valid": true,
+        "H": 10000000,
+        "A": 1785,
+        "P": 776,
+        "R": 1009,
+        "violations": []
+      },
+      {
+        "item": 2064,
+        "valid": true,
+        "H": 10000000,
+        "A": 1754,
+        "P": 730,
+        "R": 1024,
+        "violations": []
+      },
+      {
+        "item": 2065,
+        "valid": true,
+        "H": 10000000,
+        "A": 1766,
+        "P": 778,
+        "R": 988,
+        "violations": []
+      },
+      {
+        "item": 2066,
+        "valid": true,
+        "H": 10000000,
+        "A": 1783,
+        "P": 794,
+        "R": 989,
+        "violations": []
+      },
+      {
+        "item": 2067,
+        "valid": true,
+        "H": 10000000,
+        "A": 1771,
+        "P": 829,
+        "R": 942,
+        "violations": []
+      },
+      {
+        "item": 2068,
+        "valid": true,
+        "H": 10000000,
+        "A": 1771,
+        "P": 804,
+        "R": 967,
+        "violations": []
+      },
+      {
+        "item": 2069,
+        "valid": true,
+        "H": 10000000,
+        "A": 1782,
+        "P": 758,
+        "R": 1024,
+        "violations": []
+      },
+      {
+        "item": 2070,
+        "valid": true,
+        "H": 10000000,
+        "A": 1768,
+        "P": 786,
+        "R": 982,
+        "violations": []
+      },
+      {
+        "item": 2071,
+        "valid": true,
+        "H": 10000000,
+        "A": 1767,
+        "P": 701,
+        "R": 1066,
+        "violations": []
+      },
+      {
+        "item": 2072,
+        "valid": true,
+        "H": 10000000,
+        "A": 1779,
+        "P": 814,
+        "R": 965,
+        "violations": []
+      },
+      {
+        "item": 2073,
+        "valid": true,
+        "H": 10000000,
+        "A": 1769,
+        "P": 729,
+        "R": 1040,
+        "violations": []
+      },
+      {
+        "item": 2074,
+        "valid": true,
+        "H": 10000000,
+        "A": 1772,
+        "P": 791,
+        "R": 981,
+        "violations": []
+      },
+      {
+        "item": 2075,
+        "valid": true,
+        "H": 10000000,
+        "A": 1770,
+        "P": 729,
+        "R": 1041,
+        "violations": []
+      },
+      {
+        "item": 2076,
+        "valid": true,
+        "H": 10000000,
+        "A": 1784,
+        "P": 770,
+        "R": 1014,
+        "violations": []
+      },
+      {
+        "item": 2077,
+        "valid": true,
+        "H": 10000000,
+        "A": 1776,
+        "P": 739,
+        "R": 1037,
+        "violations": []
+      },
+      {
+        "item": 2078,
+        "valid": true,
+        "H": 10000000,
+        "A": 1779,
+        "P": 742,
+        "R": 1037,
+        "violations": []
+      },
+      {
+        "item": 2079,
+        "valid": true,
+        "H": 10000000,
+        "A": 1778,
+        "P": 758,
+        "R": 1020,
+        "violations": []
+      },
+      {
+        "item": 2080,
+        "valid": true,
+        "H": 10000000,
+        "A": 1783,
+        "P": 773,
+        "R": 1010,
+        "violations": []
+      },
+      {
+        "item": 2081,
+        "valid": true,
+        "H": 10000000,
+        "A": 1801,
+        "P": 780,
+        "R": 1021,
+        "violations": []
+      },
+      {
+        "item": 2082,
+        "valid": true,
+        "H": 10000000,
+        "A": 1778,
+        "P": 770,
+        "R": 1008,
+        "violations": []
+      },
+      {
+        "item": 2083,
+        "valid": true,
+        "H": 10000000,
+        "A": 1767,
+        "P": 720,
+        "R": 1047,
+        "violations": []
+      },
+      {
+        "item": 2084,
+        "valid": true,
+        "H": 10000000,
+        "A": 1761,
+        "P": 712,
+        "R": 1049,
+        "violations": []
+      },
+      {
+        "item": 2085,
+        "valid": true,
+        "H": 10000000,
+        "A": 1769,
+        "P": 791,
+        "R": 978,
+        "violations": []
+      },
+      {
+        "item": 2086,
+        "valid": true,
+        "H": 10000000,
+        "A": 1755,
+        "P": 695,
+        "R": 1060,
+        "violations": []
+      },
+      {
+        "item": 2087,
+        "valid": true,
+        "H": 10000000,
+        "A": 1784,
+        "P": 763,
+        "R": 1021,
+        "violations": []
+      },
+      {
+        "item": 2088,
+        "valid": true,
+        "H": 10000000,
+        "A": 1775,
+        "P": 780,
+        "R": 995,
+        "violations": []
+      },
+      {
+        "item": 2089,
+        "valid": true,
+        "H": 10000000,
+        "A": 1771,
+        "P": 760,
+        "R": 1011,
+        "violations": []
+      },
+      {
+        "item": 2090,
+        "valid": true,
+        "H": 10000000,
+        "A": 1771,
+        "P": 737,
+        "R": 1034,
+        "violations": []
+      },
+      {
+        "item": 2091,
+        "valid": true,
+        "H": 10000000,
+        "A": 1775,
+        "P": 786,
+        "R": 989,
+        "violations": []
+      },
+      {
+        "item": 2092,
+        "valid": true,
+        "H": 10000000,
+        "A": 1792,
+        "P": 779,
+        "R": 1013,
+        "violations": []
+      },
+      {
+        "item": 2093,
+        "valid": true,
+        "H": 10000000,
+        "A": 1773,
+        "P": 794,
+        "R": 979,
+        "violations": []
+      },
+      {
+        "item": 2094,
+        "valid": true,
+        "H": 10000000,
+        "A": 1760,
+        "P": 763,
+        "R": 997,
+        "violations": []
+      },
+      {
+        "item": 2095,
+        "valid": true,
+        "H": 10000000,
+        "A": 1795,
+        "P": 815,
+        "R": 980,
+        "violations": []
+      },
+      {
+        "item": 2096,
+        "valid": true,
+        "H": 10000000,
+        "A": 1782,
+        "P": 749,
+        "R": 1033,
+        "violations": []
+      },
+      {
+        "item": 2097,
+        "valid": true,
+        "H": 10000000,
+        "A": 1776,
+        "P": 757,
+        "R": 1019,
+        "violations": []
+      },
+      {
+        "item": 2098,
+        "valid": true,
+        "H": 10000000,
+        "A": 1791,
+        "P": 799,
+        "R": 992,
+        "violations": []
+      },
+      {
+        "item": 2099,
+        "valid": true,
+        "H": 10000000,
+        "A": 1781,
+        "P": 731,
+        "R": 1050,
+        "violations": []
+      },
+      {
+        "item": 2100,
+        "valid": true,
+        "H": 10000000,
+        "A": 1771,
+        "P": 723,
+        "R": 1048,
+        "violations": []
+      }
+    ]
+  },
+  "extra": {},
+  "phase_seconds": {
+    "reset": 0.2,
+    "seed": 4.2,
+    "initial_audit": 0.3,
+    "replica_wait": 0.0,
+    "warmup": 11.9,
+    "measure": 62.2,
+    "samplers": 0.1,
+    "drain_wait": 0.0,
+    "final_audit": 0.7
+  },
+  "replica_catch_up_wait_s": null,
+  "k6_log_tail": "",
+  "mysql_globals": {}
+}

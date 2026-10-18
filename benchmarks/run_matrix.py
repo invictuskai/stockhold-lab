@@ -136,6 +136,24 @@ def experiments():
                                          k6=dict(VUS=50, ITEM_COUNT=10, CART_DIMENSIONS=1, QUANTITY=1, TTL_SECONDS=5,
                                                  CLAIM_SHARE=0.3, CANCEL_SHARE=0.1))]))
 
+    # E18：实现与验证计划 6.2 中此前未覆盖的维度，每组都带同批基线。
+    for union_all in ('false', 'true'):
+        groups.append(dict(id='E18a', title='20 维度购物车：逐维度 SELECT vs UNION ALL',
+                           app_env={'STOCKHOLD_UNION_ALL_SELECT': union_all},
+                           configs=[dict(name=f'cart20-{"union-all" if union_all == "true" else "per-dimension"}',
+                                         script='reserve-only.js', mode='pool', items=20, capacity=1000,
+                                         k6=dict(VUS=50, ITEM_COUNT=20, CART_DIMENSIONS=20, QUANTITY=1))]))
+    groups.append(dict(id='E18b', title='单维度数量：每次预留 1 / 5 / 50 件（单热点）', app_env={},
+                       configs=[hot(f'quantity{q}-vus50', vus=50, **{}) | dict(k6=dict(VUS=50, ITEM_COUNT=1,
+                                    CART_DIMENSIONS=1, QUANTITY=q)) for q in (1, 5, 50)]))
+    groups.append(dict(id='E18c', title='商品分布：100 个商品均匀 vs Zipf 倾斜', app_env={},
+                       configs=[dict(name=f'{mode}-{dist}', script='reserve-only.js', mode=mode, items=100,
+                                     capacity=1000, k6=dict(VUS=100, ITEM_COUNT=100, CART_DIMENSIONS=1, QUANTITY=1,
+                                                            DISTRIBUTION=dist))
+                                for mode in ('pool', 'counter') for dist in ('uniform', 'zipf')]))
+    groups.append(dict(id='E18d', title='池容量：100 / 500 / 1000（单热点）', app_env={},
+                       configs=[dict(hot(f'capacity{c}-vus50', vus=50), capacity=c) for c in (100, 500, 1000)]))
+
     # E16：补充期间等待的预留在池补满后立即继续（文章第 25 条）。同一批次内对照：退避（旧行为）vs 立即重试。
     for immediate in ('false', 'true'):
         groups.append(dict(id='E16', title='池补满即继续：退避 vs 立即重试',

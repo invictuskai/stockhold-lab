@@ -387,7 +387,13 @@ def migration(args, env):
         for port in rm.PORTS:
             _, body = rm.http('GET', '/api/v1/migration/mismatches', headers=token, port=port)
             mismatches += json.loads(body)
+        # 旧系统自身的账实差异：两步确认没有中途失败时应全部为 0。
+        _, drift_body = rm.http('GET', f'/api/v1/migration/shops/{shop}/legacy-drift?items={items}'
+                                       f'&locationId={rm.LOCATION_ID}', headers=token)
+        legacy_drift = {d['key']['inventoryItemId']: d['redisAvailable'] + d['redisReserved'] - d['ledgerOnHand']
+                        for d in json.loads(drift_body)}
         return dict(experiment='migration', seconds=args.seconds, schedule=schedule, k6_exit=k6.returncode,
+                    legacy_drift_by_item=legacy_drift,
                     k6=counters(scratch / 'migration.json'), phases=phases,
                     consistency=parsed, convergence=convergence, mysql_audit=rm.audit(config, env, ON_HAND),
                     mismatch_count=len(mismatches), mismatch_samples=mismatches[:50],

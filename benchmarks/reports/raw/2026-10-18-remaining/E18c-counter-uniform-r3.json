@@ -1,0 +1,1042 @@
+{
+  "expiry_drain_after_stop_s": null,
+  "suspect_timing": false,
+  "group": "E18c",
+  "title": "商品分布：100 个商品均匀 vs Zipf 倾斜",
+  "config": "counter-uniform",
+  "rep": 3,
+  "app_env": {},
+  "instances": 1,
+  "k6_env": {
+    "VUS": 100,
+    "ITEM_COUNT": 100,
+    "CART_DIMENSIONS": 1,
+    "QUANTITY": 1,
+    "DISTRIBUTION": "uniform"
+  },
+  "mode": "counter",
+  "script": "reserve-only.js",
+  "items": 100,
+  "capacity": 1000,
+  "seed_on_hand": 10000000,
+  "duration": "60s",
+  "wall_seconds": 61.8,
+  "k6_exit": 0,
+  "warmup_exit": 0,
+  "k6": {
+    "iteration_duration": {
+      "max": 235.800833,
+      "avg": 64.35723476809959,
+      "med": 60.4785,
+      "p(95)": 99.7099504,
+      "p(99)": 132.179725
+    },
+    "vus_max": {
+      "value": 100,
+      "min": 100,
+      "max": 100
+    },
+    "reserve_other_errors": {
+      "count": 0,
+      "rate": 0
+    },
+    "http_req_receiving": {
+      "p(99)": 0.082,
+      "max": 3.589,
+      "avg": 0.025235397947786748,
+      "med": 0.022,
+      "p(95)": 0.055
+    },
+    "vus": {
+      "value": 100,
+      "min": 98,
+      "max": 100
+    },
+    "http_req_duration{op:claim}": {
+      "p(99)": 0,
+      "max": 0,
+      "avg": 0,
+      "med": 0,
+      "p(95)": 0
+    },
+    "http_req_connecting": {
+      "p(95)": 0,
+      "p(99)": 0.099,
+      "max": 1.833,
+      "avg": 0.0017284704131001127,
+      "med": 0
+    },
+    "http_reqs{op:reserve}": {
+      "rate": 1540.2243648902152,
+      "count": 94045
+    },
+    "http_req_duration{expected_response:true}": {
+      "max": 235.742,
+      "avg": 64.28517000372169,
+      "med": 60.407,
+      "p(95)": 99.63699999999999,
+      "p(99)": 132.07235999999992
+    },
+    "http_req_tls_handshaking": {
+      "avg": 0,
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0
+    },
+    "data_sent": {
+      "count": 27912563,
+      "rate": 457138.70614209276
+    },
+    "http_req_duration{op:cancel}": {
+      "avg": 0,
+      "med": 0,
+      "p(95)": 0,
+      "p(99)": 0,
+      "max": 0
+    },
+    "http_req_failed": {
+      "passes": 0,
+      "fails": 94045,
+      "value": 0
+    },
+    "http_req_duration": {
+      "avg": 64.28517000372169,
+      "med": 60.407,
+      "p(95)": 99.63699999999999,
+      "p(99)": 132.07235999999992,
+      "max": 235.742
+    },
+    "http_req_duration{op:reserve}": {
+      "med": 60.407,
+      "p(95)": 99.63699999999999,
+      "p(99)": 132.07235999999992,
+      "max": 235.742,
+      "avg": 64.28517000372169
+    },
+    "http_req_blocked": {
+      "avg": 0.0035078313573284493,
+      "med": 0.001,
+      "p(95)": 0.003,
+      "p(99)": 0.122,
+      "max": 2.873
+    },
+    "http_req_waiting": {
+      "avg": 64.25231053219203,
+      "med": 60.376,
+      "p(95)": 99.59979999999999,
+      "p(99)": 132.03799999999995,
+      "max": 235.712
+    },
+    "reserve_created": {
+      "count": 94045,
+      "rate": 1540.2243648902152
+    },
+    "iterations": {
+      "count": 94045,
+      "rate": 1540.2243648902152
+    },
+    "data_received": {
+      "rate": 810438.0716145289,
+      "count": 49484770
+    },
+    "http_reqs": {
+      "count": 94045,
+      "rate": 1540.2243648902152
+    },
+    "http_req_sending": {
+      "p(95)": 0.013,
+      "p(99)": 0.027,
+      "max": 0.28,
+      "avg": 0.007624073581794555,
+      "med": 0.007
+    }
+  },
+  "app_metrics_delta": {
+    "hikaricp_connections_acquire_seconds_count{pool=\"stockhold\"}": 94357.0,
+    "hikaricp_connections_acquire_seconds_sum{pool=\"stockhold\"}": 5065.494,
+    "hikaricp_connections_usage_seconds_count{pool=\"stockhold\"}": 94357.0,
+    "hikaricp_connections_usage_seconds_sum{pool=\"stockhold\"}": 973.433,
+    "stockhold_connection_acquire_seconds_count{op=\"benchmark\"}": 94097.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"benchmark\"}": 5051.712399,
+    "stockhold_connection_acquire_seconds_count{op=\"expiry\"}": 208.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"expiry\"}": 11.638272,
+    "stockhold_connection_acquire_seconds_count{op=\"refill\"}": 52.0,
+    "stockhold_connection_acquire_seconds_sum{op=\"refill\"}": 2.825273,
+    "stockhold_connection_hold_seconds_count{op=\"benchmark\"}": 94097.0,
+    "stockhold_connection_hold_seconds_sum{op=\"benchmark\"}": 973.367544,
+    "stockhold_connection_hold_seconds_count{op=\"expiry\"}": 208.0,
+    "stockhold_connection_hold_seconds_sum{op=\"expiry\"}": 0.529708,
+    "stockhold_connection_hold_seconds_count{op=\"refill\"}": 52.0,
+    "stockhold_connection_hold_seconds_sum{op=\"refill\"}": 0.058257,
+    "stockhold_sql_seconds_count{op=\"benchmark\"}": 376232.0,
+    "stockhold_sql_seconds_sum{op=\"benchmark\"}": 410.600793,
+    "stockhold_sql_seconds_count{op=\"expiry\"}": 208.0,
+    "stockhold_sql_seconds_sum{op=\"expiry\"}": 0.210449,
+    "stockhold_sql_seconds_count{op=\"refill\"}": 52.0,
+    "stockhold_sql_seconds_sum{op=\"refill\"}": 0.054376,
+    "stockhold_transaction_seconds_count{op=\"benchmark\",result=\"commit\"}": 94045.0,
+    "stockhold_transaction_seconds_sum{op=\"benchmark\",result=\"commit\"}": 6022.420062,
+    "stockhold_transaction_seconds_count{op=\"expiry\",result=\"commit\"}": 104.0,
+    "stockhold_transaction_seconds_sum{op=\"expiry\",result=\"commit\"}": 6.076693
+  },
+  "mysql_delta": {
+    "Innodb_row_lock_time": 23318.0,
+    "Innodb_row_lock_waits": 6776.0,
+    "Innodb_rows_inserted": 188090.0,
+    "Innodb_rows_updated": 94045.0,
+    "Questions": 753185.0
+  },
+  "samples": {
+    "hikari_pending": {
+      "avg": 80.05,
+      "max": 86.0,
+      "samples": 20
+    },
+    "hikari_active": {
+      "avg": 15.2,
+      "max": 16.0,
+      "samples": 20
+    },
+    "app_process_cpu": {
+      "avg": 0.094,
+      "max": 0.104,
+      "samples": 20
+    },
+    "host_system_cpu": {
+      "avg": 0.639,
+      "max": 0.672,
+      "samples": 20
+    },
+    "threads_running": {
+      "avg": 8.5,
+      "max": 18.0,
+      "samples": 20
+    },
+    "mysql_container_cpu_percent": {
+      "avg": 133.418,
+      "max": 139.24,
+      "samples": 20
+    }
+  },
+  "audit": {
+    "valid": true,
+    "dimensions": [
+      {
+        "item": 2001,
+        "valid": true,
+        "H": 10000000,
+        "R": 1086,
+        "activeDetail": 1086,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2002,
+        "valid": true,
+        "H": 10000000,
+        "R": 1095,
+        "activeDetail": 1095,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2003,
+        "valid": true,
+        "H": 10000000,
+        "R": 1131,
+        "activeDetail": 1131,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2004,
+        "valid": true,
+        "H": 10000000,
+        "R": 1024,
+        "activeDetail": 1024,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2005,
+        "valid": true,
+        "H": 10000000,
+        "R": 1087,
+        "activeDetail": 1087,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2006,
+        "valid": true,
+        "H": 10000000,
+        "R": 1062,
+        "activeDetail": 1062,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2007,
+        "valid": true,
+        "H": 10000000,
+        "R": 1089,
+        "activeDetail": 1089,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2008,
+        "valid": true,
+        "H": 10000000,
+        "R": 1087,
+        "activeDetail": 1087,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2009,
+        "valid": true,
+        "H": 10000000,
+        "R": 1114,
+        "activeDetail": 1114,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2010,
+        "valid": true,
+        "H": 10000000,
+        "R": 1141,
+        "activeDetail": 1141,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2011,
+        "valid": true,
+        "H": 10000000,
+        "R": 1064,
+        "activeDetail": 1064,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2012,
+        "valid": true,
+        "H": 10000000,
+        "R": 1134,
+        "activeDetail": 1134,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2013,
+        "valid": true,
+        "H": 10000000,
+        "R": 1203,
+        "activeDetail": 1203,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2014,
+        "valid": true,
+        "H": 10000000,
+        "R": 1083,
+        "activeDetail": 1083,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2015,
+        "valid": true,
+        "H": 10000000,
+        "R": 1115,
+        "activeDetail": 1115,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2016,
+        "valid": true,
+        "H": 10000000,
+        "R": 1119,
+        "activeDetail": 1119,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2017,
+        "valid": true,
+        "H": 10000000,
+        "R": 1022,
+        "activeDetail": 1022,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2018,
+        "valid": true,
+        "H": 10000000,
+        "R": 1112,
+        "activeDetail": 1112,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2019,
+        "valid": true,
+        "H": 10000000,
+        "R": 1217,
+        "activeDetail": 1217,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2020,
+        "valid": true,
+        "H": 10000000,
+        "R": 1163,
+        "activeDetail": 1163,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2021,
+        "valid": true,
+        "H": 10000000,
+        "R": 1054,
+        "activeDetail": 1054,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2022,
+        "valid": true,
+        "H": 10000000,
+        "R": 1069,
+        "activeDetail": 1069,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2023,
+        "valid": true,
+        "H": 10000000,
+        "R": 1050,
+        "activeDetail": 1050,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2024,
+        "valid": true,
+        "H": 10000000,
+        "R": 1130,
+        "activeDetail": 1130,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2025,
+        "valid": true,
+        "H": 10000000,
+        "R": 1136,
+        "activeDetail": 1136,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2026,
+        "valid": true,
+        "H": 10000000,
+        "R": 1131,
+        "activeDetail": 1131,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2027,
+        "valid": true,
+        "H": 10000000,
+        "R": 1134,
+        "activeDetail": 1134,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2028,
+        "valid": true,
+        "H": 10000000,
+        "R": 1135,
+        "activeDetail": 1135,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2029,
+        "valid": true,
+        "H": 10000000,
+        "R": 1111,
+        "activeDetail": 1111,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2030,
+        "valid": true,
+        "H": 10000000,
+        "R": 1078,
+        "activeDetail": 1078,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2031,
+        "valid": true,
+        "H": 10000000,
+        "R": 1098,
+        "activeDetail": 1098,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2032,
+        "valid": true,
+        "H": 10000000,
+        "R": 1061,
+        "activeDetail": 1061,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2033,
+        "valid": true,
+        "H": 10000000,
+        "R": 1140,
+        "activeDetail": 1140,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2034,
+        "valid": true,
+        "H": 10000000,
+        "R": 1121,
+        "activeDetail": 1121,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2035,
+        "valid": true,
+        "H": 10000000,
+        "R": 1116,
+        "activeDetail": 1116,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2036,
+        "valid": true,
+        "H": 10000000,
+        "R": 1113,
+        "activeDetail": 1113,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2037,
+        "valid": true,
+        "H": 10000000,
+        "R": 1107,
+        "activeDetail": 1107,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2038,
+        "valid": true,
+        "H": 10000000,
+        "R": 1095,
+        "activeDetail": 1095,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2039,
+        "valid": true,
+        "H": 10000000,
+        "R": 1120,
+        "activeDetail": 1120,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2040,
+        "valid": true,
+        "H": 10000000,
+        "R": 1131,
+        "activeDetail": 1131,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2041,
+        "valid": true,
+        "H": 10000000,
+        "R": 1168,
+        "activeDetail": 1168,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2042,
+        "valid": true,
+        "H": 10000000,
+        "R": 1173,
+        "activeDetail": 1173,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2043,
+        "valid": true,
+        "H": 10000000,
+        "R": 1117,
+        "activeDetail": 1117,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2044,
+        "valid": true,
+        "H": 10000000,
+        "R": 1142,
+        "activeDetail": 1142,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2045,
+        "valid": true,
+        "H": 10000000,
+        "R": 1122,
+        "activeDetail": 1122,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2046,
+        "valid": true,
+        "H": 10000000,
+        "R": 1107,
+        "activeDetail": 1107,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2047,
+        "valid": true,
+        "H": 10000000,
+        "R": 1170,
+        "activeDetail": 1170,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2048,
+        "valid": true,
+        "H": 10000000,
+        "R": 1139,
+        "activeDetail": 1139,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2049,
+        "valid": true,
+        "H": 10000000,
+        "R": 1105,
+        "activeDetail": 1105,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2050,
+        "valid": true,
+        "H": 10000000,
+        "R": 1076,
+        "activeDetail": 1076,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2051,
+        "valid": true,
+        "H": 10000000,
+        "R": 1145,
+        "activeDetail": 1145,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2052,
+        "valid": true,
+        "H": 10000000,
+        "R": 1103,
+        "activeDetail": 1103,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2053,
+        "valid": true,
+        "H": 10000000,
+        "R": 1160,
+        "activeDetail": 1160,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2054,
+        "valid": true,
+        "H": 10000000,
+        "R": 1194,
+        "activeDetail": 1194,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2055,
+        "valid": true,
+        "H": 10000000,
+        "R": 1104,
+        "activeDetail": 1104,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2056,
+        "valid": true,
+        "H": 10000000,
+        "R": 1109,
+        "activeDetail": 1109,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2057,
+        "valid": true,
+        "H": 10000000,
+        "R": 1083,
+        "activeDetail": 1083,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2058,
+        "valid": true,
+        "H": 10000000,
+        "R": 1155,
+        "activeDetail": 1155,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2059,
+        "valid": true,
+        "H": 10000000,
+        "R": 1174,
+        "activeDetail": 1174,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2060,
+        "valid": true,
+        "H": 10000000,
+        "R": 1146,
+        "activeDetail": 1146,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2061,
+        "valid": true,
+        "H": 10000000,
+        "R": 1153,
+        "activeDetail": 1153,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2062,
+        "valid": true,
+        "H": 10000000,
+        "R": 1159,
+        "activeDetail": 1159,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2063,
+        "valid": true,
+        "H": 10000000,
+        "R": 1108,
+        "activeDetail": 1108,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2064,
+        "valid": true,
+        "H": 10000000,
+        "R": 1173,
+        "activeDetail": 1173,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2065,
+        "valid": true,
+        "H": 10000000,
+        "R": 1110,
+        "activeDetail": 1110,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2066,
+        "valid": true,
+        "H": 10000000,
+        "R": 1140,
+        "activeDetail": 1140,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2067,
+        "valid": true,
+        "H": 10000000,
+        "R": 1061,
+        "activeDetail": 1061,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2068,
+        "valid": true,
+        "H": 10000000,
+        "R": 1140,
+        "activeDetail": 1140,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2069,
+        "valid": true,
+        "H": 10000000,
+        "R": 1045,
+        "activeDetail": 1045,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2070,
+        "valid": true,
+        "H": 10000000,
+        "R": 1122,
+        "activeDetail": 1122,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2071,
+        "valid": true,
+        "H": 10000000,
+        "R": 1113,
+        "activeDetail": 1113,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2072,
+        "valid": true,
+        "H": 10000000,
+        "R": 1138,
+        "activeDetail": 1138,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2073,
+        "valid": true,
+        "H": 10000000,
+        "R": 1113,
+        "activeDetail": 1113,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2074,
+        "valid": true,
+        "H": 10000000,
+        "R": 1091,
+        "activeDetail": 1091,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2075,
+        "valid": true,
+        "H": 10000000,
+        "R": 1078,
+        "activeDetail": 1078,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2076,
+        "valid": true,
+        "H": 10000000,
+        "R": 1140,
+        "activeDetail": 1140,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2077,
+        "valid": true,
+        "H": 10000000,
+        "R": 1121,
+        "activeDetail": 1121,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2078,
+        "valid": true,
+        "H": 10000000,
+        "R": 1132,
+        "activeDetail": 1132,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2079,
+        "valid": true,
+        "H": 10000000,
+        "R": 1117,
+        "activeDetail": 1117,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2080,
+        "valid": true,
+        "H": 10000000,
+        "R": 1149,
+        "activeDetail": 1149,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2081,
+        "valid": true,
+        "H": 10000000,
+        "R": 1063,
+        "activeDetail": 1063,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2082,
+        "valid": true,
+        "H": 10000000,
+        "R": 1053,
+        "activeDetail": 1053,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2083,
+        "valid": true,
+        "H": 10000000,
+        "R": 1195,
+        "activeDetail": 1195,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2084,
+        "valid": true,
+        "H": 10000000,
+        "R": 1189,
+        "activeDetail": 1189,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2085,
+        "valid": true,
+        "H": 10000000,
+        "R": 1182,
+        "activeDetail": 1182,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2086,
+        "valid": true,
+        "H": 10000000,
+        "R": 1135,
+        "activeDetail": 1135,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2087,
+        "valid": true,
+        "H": 10000000,
+        "R": 1133,
+        "activeDetail": 1133,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2088,
+        "valid": true,
+        "H": 10000000,
+        "R": 1092,
+        "activeDetail": 1092,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2089,
+        "valid": true,
+        "H": 10000000,
+        "R": 1203,
+        "activeDetail": 1203,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2090,
+        "valid": true,
+        "H": 10000000,
+        "R": 1103,
+        "activeDetail": 1103,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2091,
+        "valid": true,
+        "H": 10000000,
+        "R": 1133,
+        "activeDetail": 1133,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2092,
+        "valid": true,
+        "H": 10000000,
+        "R": 1105,
+        "activeDetail": 1105,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2093,
+        "valid": true,
+        "H": 10000000,
+        "R": 1141,
+        "activeDetail": 1141,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2094,
+        "valid": true,
+        "H": 10000000,
+        "R": 1090,
+        "activeDetail": 1090,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2095,
+        "valid": true,
+        "H": 10000000,
+        "R": 1046,
+        "activeDetail": 1046,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2096,
+        "valid": true,
+        "H": 10000000,
+        "R": 1152,
+        "activeDetail": 1152,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2097,
+        "valid": true,
+        "H": 10000000,
+        "R": 1111,
+        "activeDetail": 1111,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2098,
+        "valid": true,
+        "H": 10000000,
+        "R": 1096,
+        "activeDetail": 1096,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2099,
+        "valid": true,
+        "H": 10000000,
+        "R": 1169,
+        "activeDetail": 1169,
+        "claimedDetail": 0
+      },
+      {
+        "item": 2100,
+        "valid": true,
+        "H": 10000000,
+        "R": 1113,
+        "activeDetail": 1113,
+        "claimedDetail": 0
+      }
+    ]
+  },
+  "extra": {},
+  "phase_seconds": {
+    "reset": 0.1,
+    "seed": 0.5,
+    "initial_audit": 0.1,
+    "replica_wait": 0.0,
+    "warmup": 11.9,
+    "measure": 62.0,
+    "samplers": 0.1,
+    "drain_wait": 0.0,
+    "final_audit": 0.3
+  },
+  "replica_catch_up_wait_s": null,
+  "k6_log_tail": "",
+  "mysql_globals": {}
+}
