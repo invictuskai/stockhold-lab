@@ -77,6 +77,71 @@ class ReserveBatchingTest extends IntegrationTestBase {
         assertQuantities(key, 100, 100, 79, 21);
     }
 
+    private long reserveRollbacks() {
+        return meters.find("stockhold.transaction").tag("op", "reserve").tag("result", "rollback").timers().stream()
+                .mapToLong(Timer::count).sum();
+    }
+
+    /**
+     * 另一个未提交的事务正持有幂等键 K：批次中 K 的写头要等锁（最多 innodb_lock_wait_timeout），
+     * 超时只回滚 K 这个成员，同批的其他结账照常提交，批次事务不回滚。
+     */
+    @Test
+    void keyHeldByAnotherTransactionOnlyAffectsThatMember() throws Exception {
+        InventoryKey key = createInventory(newShop(), ITEM_A, LOCATION_X, 100, 1000);
+        InventoryKey other = createInventory(key.shopId(), ITEM_B, LOCATION_X, 100, 1000);
+        refills.refillOneDimension(key, false);
+        refills.refillOneDimension(other, false);
+        String held = newKey("held");
+        java.util.concurrent.CountDownLatch holding = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(5);
+        try {
+            // 两维度的预留不走批量路径：写完头后停住，持有幂等键 K 的锁。
+            var holder = pool.submit(() -> {
+                Thread self = Thread.currentThread();
+                faults.install(point -> {
+                    if (point == Point.RESERVE_AFTER_UNIT_DELETE && Thread.currentThread() == self) {
+                        holding.countDown();
+                        try {
+                            release.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                });
+                return reservations.reserve(key.shopId(), held, null, List.of(line(key, 1), line(other, 1)));
+            });
+            assertThat(holding.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            long rollbacksBefore = reserveRollbacks();
+
+            var stalled = pool.submit(() -> errorCodeOf(() ->
+                    reservations.reserve(key.shopId(), held, null, List.of(line(key, 1)))));
+            List<java.util.concurrent.Future<Reservation>> others = new ArrayList<>();
+            for (int i = 0; i < 3; i++) {
+                others.add(pool.submit(() -> reserve(key, 1)));
+            }
+            for (var future : others) {
+                assertThat(future.get(10, java.util.concurrent.TimeUnit.SECONDS).header().status().name())
+                        .isEqualTo("ACTIVE");
+            }
+            assertThat(reserveRollbacks() - rollbacksBefore).as("batch transactions rolled back").isZero();
+
+            release.countDown();
+            assertThat(holder.get(10, java.util.concurrent.TimeUnit.SECONDS).reservation().header().idempotencyKey())
+                    .isEqualTo(held);
+            // K 的单维度请求与持有者是不同请求：最终是幂等冲突，或在重试预算内仍被锁住而报繁忙。
+            assertThat(stalled.get(10, java.util.concurrent.TimeUnit.SECONDS))
+                    .isIn(lab.inventory.domain.exception.ErrorCode.IDEMPOTENCY_CONFLICT,
+                            lab.inventory.domain.exception.ErrorCode.INVENTORY_BUSY);
+        } finally {
+            release.countDown();
+            faults.clear();
+            pool.shutdownNow();
+        }
+        assertQuantities(key, 100, 100, 96, 4);
+    }
+
     @Test
     void injectedFaultRollsBackTheWholeBatchAndLeavesNothingBehind() throws InterruptedException {
         InventoryKey key = createInventory(newShop(), ITEM_A, LOCATION_X, 100, 1000);

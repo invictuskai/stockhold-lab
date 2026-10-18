@@ -176,28 +176,32 @@ public class ReserveBatcher {
             }
             List<byte[]> mine = locked.subList(offset, offset + line.quantity());
             Object savepoint = status.createSavepoint();
+            Instant expiresAt = now.plusSeconds(member.request().ttlSeconds());
             try {
-                Instant expiresAt = now.plusSeconds(member.request().ttlSeconds());
                 reservations.insertHeader(member.reservationId(), member.idempotencyKey(), member.request(), now,
                         expiresAt);
-                if (units.deleteExact(key, mine) != line.quantity()) {
-                    throw ApiException.invariantViolation("Deleted unit count differs from the locked unit count.",
-                            key);
-                }
-                faults.at(FaultInjector.Point.RESERVE_AFTER_UNIT_DELETE);
-                reservations.insertLine(member.request().shopId(), member.reservationId(), 1, line);
-                status.releaseSavepoint(savepoint);
-                offset += line.quantity();
-                Reservation reservation = reservation(member, line, now, expiresAt);
-                publish.add(() -> member.result().complete(reservation));
             } catch (RuntimeException e) {
-                if (!SqlErrors.isDuplicateKey(e, ReservationRepository.IDEMPOTENCY_INDEX)) {
-                    throw e; // 其他失败让整个批次回滚，与单独预留一致
+                // 写头只会因为幂等键而失败或等待：同键已存在（重复），或另一个尚未提交的事务正持有同一个键
+                // （锁等待超时，最多 innodb_lock_wait_timeout）。两种情况都只回滚这个成员，其余成员照常提交；
+                // 锁等待超时只回滚当前语句，事务仍可继续。
+                if (SqlErrors.isDuplicateKey(e, ReservationRepository.IDEMPOTENCY_INDEX)
+                        || SqlErrors.isLockWaitTimeout(e)) {
+                    status.rollbackToSavepoint(savepoint);
+                    publish.add(() -> member.result().completeExceptionally(e));
+                    continue;
                 }
-                // 幂等键重复只回滚这个成员；它的单位留给后面的成员。
-                status.rollbackToSavepoint(savepoint);
-                publish.add(() -> member.result().completeExceptionally(e));
+                throw e;
             }
+            // 写头之后的任何失败都让整个批次回滚，与单独预留一致。
+            if (units.deleteExact(key, mine) != line.quantity()) {
+                throw ApiException.invariantViolation("Deleted unit count differs from the locked unit count.", key);
+            }
+            faults.at(FaultInjector.Point.RESERVE_AFTER_UNIT_DELETE);
+            reservations.insertLine(member.request().shopId(), member.reservationId(), 1, line);
+            status.releaseSavepoint(savepoint);
+            offset += line.quantity();
+            Reservation reservation = reservation(member, line, now, expiresAt);
+            publish.add(() -> member.result().complete(reservation));
         }
     }
 

@@ -20,6 +20,12 @@ public final class SqlErrors {
                 || "40001".equals(sql.getSQLState()));
     }
 
+    /** 锁等待超时：InnoDB 只回滚当前语句（innodb_rollback_on_timeout 默认关闭），事务仍可继续。 */
+    public static boolean isLockWaitTimeout(Throwable error) {
+        SQLException sql = findSqlException(error);
+        return sql != null && sql.getErrorCode() == ER_LOCK_WAIT_TIMEOUT;
+    }
+
     public static boolean isDuplicateKey(Throwable error) {
         SQLException sql = findSqlException(error);
         return sql != null && sql.getErrorCode() == ER_DUP_ENTRY;
