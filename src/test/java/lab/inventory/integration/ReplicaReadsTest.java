@@ -15,6 +15,7 @@ import lab.inventory.support.IntegrationTestBase;
 import lab.inventory.support.MySqlTestDatabase;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -23,6 +24,8 @@ import org.springframework.test.context.DynamicPropertySource;
  * 文章：部分读流量移到只读副本。只有显式声明 consistency=eventual 的公开查询会读副本；
  * 未配置副本时回落到主库。真实副本由 STOCKHOLD_TEST_REPLICA_JDBC_URL 指定（compose 的 replica profile）。
  */
+// 该上下文的副本心跳任务会持续写共享的心跳行；类结束后关闭上下文，避免干扰 ReplicaLagGuardTest。
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class ReplicaReadsTest extends IntegrationTestBase {
 
     private static final String REPLICA_URL = System.getenv("STOCKHOLD_TEST_REPLICA_JDBC_URL");
@@ -66,27 +69,31 @@ class ReplicaReadsTest extends IntegrationTestBase {
     }
 
     @Test
-    void eventualReadsAreServedByTheReplicaOnceItHasCaughtUp() throws InterruptedException {
+    void eventualReadsNeverReportReplicationLagAsNotFound() throws InterruptedException {
         Assumptions.assumeTrue(replicaReads.configured(),
                 "Set STOCKHOLD_TEST_REPLICA_JDBC_URL (compose replica profile + scripts/replica-setup.sh)");
         InventoryKey key = createInventory(newShop(), ITEM_A, LOCATION_X, 10, 1000);
         Reservation reservation = reserve(key, 3);
 
-        // 副本可能落后：轮询直到它追上，这正是调用方选择 eventual 时接受的语义。
-        ReplicaReads.Read<Reservation> read = null;
+        // 刚创建：副本可能还没有，读取回落主库，但绝不返回 404。
+        ReplicaReads.Read<Reservation> immediate = replicaReads.reservation(key.shopId(),
+                reservation.header().reservationId(), Consistency.EVENTUAL);
+        assertThat(immediate.source()).isIn("replica", "primary-fallback");
+        assertThat(immediate.value().header().reservationId()).isEqualTo(reservation.header().reservationId());
+
+        // 副本追上后由副本服务。
+        String source = null;
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
         while (System.nanoTime() < deadline) {
-            try {
-                read = replicaReads.reservation(key.shopId(), reservation.header().reservationId(),
-                        Consistency.EVENTUAL);
+            source = replicaReads.reservation(key.shopId(), reservation.header().reservationId(),
+                    Consistency.EVENTUAL).source();
+            if (source.equals("replica")) {
                 break;
-            } catch (ApiException notYetReplicated) {
-                Thread.sleep(50);
             }
+            Thread.sleep(50);
         }
-        assertThat(read).as("replica caught up within 10s").isNotNull();
-        assertThat(read.source()).isEqualTo("replica");
-        assertThat(read.value().header().reservationId()).isEqualTo(reservation.header().reservationId());
+        assertThat(source).as("replica served the read within 10s").isEqualTo("replica");
+        assertThat(replicaReads.stalenessMillis()).isNotNull().isLessThan(1500L);
 
         ReplicaReads.Read<InventorySnapshot> snapshot = replicaReads.snapshot(key, Consistency.EVENTUAL);
         assertThat(snapshot.source()).isEqualTo("replica");
