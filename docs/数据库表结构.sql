@@ -204,3 +204,15 @@ CREATE TABLE inventory_operations (
 -- inventory_operations 的 after 字段为当次操作提交时快照，不是当前库存。
 -- 创建操作头时可填合法占位快照，在同一事务锁定账本后写入最终快照；
 -- 任何失败必须整个事务回滚，不允许保留未完成操作头。
+
+-- =====================================================================
+-- V2：只读副本的复制延迟心跳（总体技术方案第 18 节）
+-- 主库定期 UPDATE beat_at = UTC_TIMESTAMP(6)；副本上 UTC_TIMESTAMP(6) - beat_at 即副本落后程度的上界。
+-- 读副本前若超过阈值（stockhold.replica.max-staleness-millis），查询改读主库。依赖主库与副本时钟同步。
+-- =====================================================================
+CREATE TABLE replica_heartbeat (
+    id       TINYINT NOT NULL COMMENT '固定为 1',
+    beat_at  DATETIME(6) NOT NULL COMMENT '主库最近一次写入心跳的 UTC 时间',
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+  COMMENT='副本延迟心跳：读副本前据此判断副本是否足够新';

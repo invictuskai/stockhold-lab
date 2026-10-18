@@ -4,6 +4,7 @@
 | --- | --- |
 | [2026-10-15 单位池 vs 单计数器](2026-10-15-unit-pool-vs-counter.md) | 单机（M1 Max + colima MySQL 8.4）上的 E1–E6：热点预留、完整生命周期、UNION ALL、连接持有注入、池容量、连接优化前后 |
 | [2026-10-16 扩展性与故障演练](2026-10-16-scaling-and-drills.md) | E7–E11：Hikari 连接数扫描、多应用实例、进程崩溃重启、ProxySQL 连接归因、Redis → MySQL 影子迁移 |
+| [2026-10-18 修复](2026-10-18-fixes.md) | 验证中发现的五个问题的修复与对照：到期清理（E17）、读副本延迟保护（E13b）、批量成员隔离、Flyway、测试库清理；夜间睡眠导致的失效测量与防护 |
 | [2026-10-17 文章完整落地](2026-10-17-article-completion.md) | E12–E16、E10X 与演练：InnoDB 线程并发度、读副本、跨结账批量、安全的邻居、补满即继续、长事务耗尽 ProxySQL 后端、按 pod 逐步上线 |
 
 原始数据在 [raw/](raw)，用 [`benchmarks/run_matrix.py`](../run_matrix.py)（压测矩阵）与 [`benchmarks/drills.py`](../drills.py)（崩溃 / ProxySQL / 迁移演练）生成、[`benchmarks/summarize.py`](../summarize.py) 汇总。所有结果都是单机相对比较，不是生产容量结论。
