@@ -343,6 +343,88 @@ class ApiContractTest extends IntegrationTestBase {
                 .andExpect(jsonPath("$.status").value("CLAIMED"));
     }
 
+    /** 接口契约 7.2：候选地点经由 HTTP 的完整语义。 */
+    @Test
+    void candidateLocationsOverHttp() throws Exception {
+        long shop = newShop();
+        createInventory(shop, ITEM_A, LOCATION_X, 2, 1000);
+        createInventory(shop, ITEM_A, LOCATION_Y, 10, 1000);
+        String body = """
+                {"lines":[{"inventoryItemId":%d,"locationIds":[%d,%d],"quantity":3}]}"""
+                .formatted(ITEM_A, LOCATION_X, LOCATION_Y);
+
+        // 首选地点只有 2 件，整行落在第二个候选。
+        mvc.perform(post("/api/v1/shops/{shop}/reservations", shop).header("Idempotency-Key", "cand-1")
+                .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.lines", hasSize(1)))
+                .andExpect(jsonPath("$.lines[0].locationId").value((int) LOCATION_Y))
+                .andExpect(jsonPath("$.lines[0].quantity").value(3));
+        mvc.perform(post("/api/v1/shops/{shop}/reservations", shop).header("Idempotency-Key", "cand-1")
+                .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Idempotent-Replayed", "true"))
+                .andExpect(jsonPath("$.lines[0].locationId").value((int) LOCATION_Y));
+
+        // 同一幂等键、候选顺序不同：不同意图。
+        mvc.perform(post("/api/v1/shops/{shop}/reservations", shop).header("Idempotency-Key", "cand-1")
+                .contentType(MediaType.APPLICATION_JSON).content("""
+                        {"lines":[{"inventoryItemId":%d,"locationIds":[%d,%d],"quantity":3}]}"""
+                        .formatted(ITEM_A, LOCATION_Y, LOCATION_X)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("IDEMPOTENCY_CONFLICT"));
+
+        // locationId 与 locationIds 同时给出：参数错误。
+        mvc.perform(post("/api/v1/shops/{shop}/reservations", shop).header("Idempotency-Key", "cand-2")
+                .contentType(MediaType.APPLICATION_JSON).content("""
+                        {"lines":[{"inventoryItemId":%d,"locationId":%d,"locationIds":[%d],"quantity":1}]}"""
+                        .formatted(ITEM_A, LOCATION_X, LOCATION_Y)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_ARGUMENT"));
+
+        // 没有任何一个候选能单独满足：不拆分，报库存不足并列出候选。
+        mvc.perform(post("/api/v1/shops/{shop}/reservations", shop).header("Idempotency-Key", "cand-3")
+                .contentType(MediaType.APPLICATION_JSON).content("""
+                        {"lines":[{"inventoryItemId":%d,"locationIds":[%d,%d],"quantity":9}]}"""
+                        .formatted(ITEM_A, LOCATION_X, LOCATION_Y)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("INSUFFICIENT_STOCK"))
+                .andExpect(jsonPath("$.details.inventoryItemId").value((int) ITEM_A))
+                .andExpect(jsonPath("$.details.locationIds", hasSize(2)));
+    }
+
+    /** 接口契约第 5、8 节：consistency 参数与 X-Read-Source 响应头（本上下文未配置副本，eventual 读主库）。 */
+    @Test
+    void readConsistencyOverHttp() throws Exception {
+        long shop = newShop();
+        createInventory(shop, ITEM_A, LOCATION_X, 10, 1000);
+        String reservationId = JsonPath.read(mvc.perform(post("/api/v1/shops/{shop}/reservations", shop)
+                .header("Idempotency-Key", "read-1").contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"lines":[{"inventoryItemId":%d,"locationId":%d,"quantity":2}]}"""
+                        .formatted(ITEM_A, LOCATION_X)))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(), "$.reservationId");
+
+        String snapshot = "/api/v1/shops/{shop}/inventory/{item}/locations/{location}";
+        mvc.perform(get(snapshot, shop, ITEM_A, LOCATION_X))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Read-Source", "primary"))
+                .andExpect(jsonPath("$.activeReservedQuantity").value(2));
+        mvc.perform(get(snapshot + "?consistency=eventual", shop, ITEM_A, LOCATION_X))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Read-Source", "primary"));
+        mvc.perform(get("/api/v1/shops/{shop}/reservations/{id}?consistency=eventual", shop, reservationId))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Read-Source", "primary"))
+                .andExpect(jsonPath("$.reservationId").value(reservationId));
+        mvc.perform(get("/api/v1/shops/{shop}/reservations/by-idempotency-key?key=read-1&consistency=strong", shop))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Read-Source", "primary"));
+        mvc.perform(get(snapshot + "?consistency=stale", shop, ITEM_A, LOCATION_X))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_ARGUMENT"));
+    }
+
     @Test
     void openApiDocumentIsPublished() throws Exception {
         mvc.perform(get("/v3/api-docs"))
